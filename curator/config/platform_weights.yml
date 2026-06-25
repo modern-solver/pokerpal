@@ -1,15 +1,260 @@
 # Curator Bot v1.1 — platform_weights.yml
 # ============================================================================
-# PLACEHOLDER STUB — created by Agent A0 (Stage S-00).
-# OWNER: Agent A2 (Stage S-02) fills in the real scoring profiles, and Agent A6
-# (Stage S-06) tunes weights against real photo samples.
+# OWNER: Agent A2 (Stage S-02) — real scoring schema + values.
+#        Agent A6 (Stage S-06) tunes the numbers against real photo samples.
 #
-# Per PRD Section 05, each of the 6 platforms gets a scoring profile covering:
-#   - grading-axis weight allocation (composition / lighting / technical / platform_fit)
-#   - platform-fit sub-rules (aspect ratio, saturation, face, etc.)
-#   - the CaptionAgent output format for that platform
+# This file is the single source of truth for Tier 2 (local, zero-cost) platform-
+# fit scoring. The Tier 2 scorer (curator/grading/tier2.py) reads it so weights and
+# point rules tune WITHOUT a code change. Per PRD Section 05.
 #
-# Tier 2 reads this file so weights tune without a code change. Do NOT add real
-# values here at S-00 — A2 owns the schema and values.
-# Platforms: instagram, facebook, tinder, bumble, hinge, linkedin
+# SCHEMA (per platform):
+#   weights:            grading-axis allocation. Must sum to ~1.0 (fractions).
+#     composition / lighting / technical / platform_fit
+#   output:             CaptionAgent output type + caption shape (consumed by A4;
+#                       carried here for completeness, not used by Tier 2 scoring).
+#   face:               face-gate behaviour.
+#     mandatory:        if true and face_count == 0 -> hard cap (dating gate, G-08).
+#     cap_score:        composite cap applied when mandatory face is missing.
+#   fit_rules:          ordered list of additive point rules evaluated against the
+#                       Tier-1 metadata of a single photo. Each rule has a `type`
+#                       (dispatched by tier2.py) and rule-specific params, plus the
+#                       points to add. The raw point sum is normalised to a 0..10
+#                       `platform_fit` score by tier2.py (see fit_score_scale).
+#
+# fit_score_scale: the raw additive points are mapped onto a 0..10 platform_fit
+#   score linearly: clamp(base + points, 0, 10). `base` is the neutral midpoint a
+#   photo with no bonuses/penalties scores. Defined per-platform so dating apps
+#   (which lean hard on face/aspect signals) can use a lower neutral base.
+#
+# RULE TYPES (dispatched in tier2.py):
+#   aspect_ratio   — map an aspect bucket -> points. params: buckets {name: pts},
+#                    tolerance (frac). Buckets: portrait_4_5, square_1_1,
+#                    story_9_16, landscape_16_9, standard_4_3.
+#   saturation     — threshold rules on Tier-1 saturation mean (0..1 scale).
+#                    params: list of {op, value, points}. op in gt/lt/between.
+#   warm_tones     — +points if warm hue dominant (hue 15-45). params: points.
+#                    (Tier-1 may set warm_dominant bool; default no-op if unknown.)
+#   face_present   — +points if face_count >= 1. params: points.
+#   face_absent_penalty — apply when face_count == 0 (non-mandatory soft signal).
+#   face_size      — +points if largest face area fraction > frac. params: frac, points.
+#   solo_subject   — +points if face_count == 1. params: points.
+#   group_photo    — +points if face_count >= min_faces. params: min_faces, points.
+#   group_penalty  — +points (usually negative) if face_count >= min_faces.
+#   horizon_level  — +points if horizon within tolerance (Tier-1 hint). params: points.
+#   text_overlay   — +points if text/watermark detected (sign varies by platform).
+#                    params: points. (Tier-1 hint `text_overlay`; default absent.)
+#   scene_context  — +points if a scene-context signal is present. Driven by the
+#                    OPTIONAL scene-description string (A3/BLIP-2). For A2 the hook
+#                    exists and is no-op when scene description is None.
+#                    params: keywords (list), points.
+#   smile_mood     — +points if mood score > threshold. params: threshold, points.
+#                    (Mood comes from A3; no-op in A2 unless supplied.)
+#   sunglasses     — penalty if sunglasses cover eyes (A3 hint). params: points.
+#   heavy_filter   — penalty if heavy filter (saturation > value). params: value, points.
 # ============================================================================
+
+instagram:
+  weights:
+    composition: 0.25
+    lighting: 0.25
+    technical: 0.15
+    platform_fit: 0.35
+  output:
+    type: post_caption
+    max_chars: 150
+    hashtags: "5-10"
+  face:
+    mandatory: false
+    cap_score: null
+  fit_score_scale:
+    base: 5.0
+  fit_rules:
+    - type: aspect_ratio
+      buckets:
+        portrait_4_5: 4
+        square_1_1: 2
+        story_9_16: 3
+        landscape_16_9: -3
+    - type: saturation
+      thresholds:
+        - {op: gt, value: 0.55, points: 2}
+        - {op: lt, value: 0.25, points: -1}
+    - type: warm_tones
+      points: 1
+    - type: face_present
+      points: 3
+    - type: horizon_level
+      points: 1
+    - type: text_overlay
+      points: -4
+
+facebook:
+  weights:
+    composition: 0.20
+    lighting: 0.20
+    technical: 0.15
+    platform_fit: 0.45
+  output:
+    type: post_caption
+    max_chars: 500
+    hashtags: "3-5"
+  face:
+    mandatory: false
+    cap_score: null
+  fit_score_scale:
+    base: 5.0
+  fit_rules:
+    - type: aspect_ratio
+      buckets:
+        landscape_16_9: 4
+        standard_4_3: 3
+        square_1_1: 1
+    - type: scene_context
+      keywords: [group, crowd, party, event, family, friends, gathering, multiple]
+      points: 2
+    - type: text_overlay
+      points: 1
+    - type: face_present
+      points: 1
+    - type: group_photo
+      min_faces: 2
+      points: 2
+
+tinder:
+  weights:
+    composition: 0.15
+    lighting: 0.20
+    technical: 0.15
+    platform_fit: 0.50
+  output:
+    type: dating_bio
+    max_chars: 100
+    hashtags: none
+  face:
+    mandatory: true
+    cap_score: 3.0
+  fit_score_scale:
+    base: 4.0
+  fit_rules:
+    - type: face_size
+      frac: 0.20
+      points: 4
+    - type: aspect_ratio
+      buckets:
+        story_9_16: 4
+        portrait_4_5: 3
+        landscape_16_9: -3
+    - type: smile_mood
+      threshold: 7
+      points: 2
+    - type: solo_subject
+      points: 2
+    - type: group_penalty
+      min_faces: 3
+      points: -2
+    - type: sunglasses
+      points: -3
+    - type: heavy_filter
+      value: 0.85
+      points: -2
+
+bumble:
+  weights:
+    composition: 0.15
+    lighting: 0.20
+    technical: 0.15
+    platform_fit: 0.50
+  output:
+    type: dating_bio
+    max_chars: 150
+    hashtags: none
+  face:
+    mandatory: true
+    cap_score: 3.0
+  fit_score_scale:
+    base: 4.0
+  fit_rules:
+    - type: face_present
+      points: 3
+    - type: scene_context
+      keywords: [hiking, running, cooking, playing, traveling, climbing, surfing, dancing, activity]
+      points: 3
+    - type: aspect_ratio
+      buckets:
+        story_9_16: 4
+        portrait_4_5: 3
+        landscape_16_9: -2
+    - type: saturation
+      thresholds:
+        - {op: lt, value: 0.45, points: 1}
+    - type: group_penalty
+      min_faces: 3
+      points: -1
+
+hinge:
+  weights:
+    composition: 0.20
+    lighting: 0.20
+    technical: 0.15
+    platform_fit: 0.45
+  output:
+    type: prompt_answer
+    max_chars: 150
+    hashtags: none
+  face:
+    mandatory: false
+    cap_score: null
+  fit_score_scale:
+    base: 5.0
+  fit_rules:
+    - type: scene_context
+      keywords: [hiking, traveling, cooking, playing, climbing, activity, lifestyle, hobby]
+      points: 4
+    - type: scene_context
+      keywords: [travel, outdoor, mountain, beach, city, nature]
+      points: 2
+    - type: scene_context
+      keywords: [food, drink, restaurant, coffee, dinner]
+      points: 1
+    - type: aspect_ratio
+      buckets:
+        portrait_4_5: 3
+        square_1_1: 2
+        story_9_16: 2
+
+linkedin:
+  weights:
+    composition: 0.30
+    lighting: 0.25
+    technical: 0.20
+    platform_fit: 0.25
+  output:
+    type: linkedin_post
+    max_chars: 300
+    hashtags: "3-5"
+  face:
+    mandatory: false
+    cap_score: null
+  fit_score_scale:
+    base: 5.0
+  fit_rules:
+    - type: face_present
+      points: 4
+    - type: scene_context
+      keywords: [clean, neutral, studio, plain, office]
+      points: 2
+    - type: saturation
+      thresholds:
+        - {op: between, low: 0.30, high: 0.55, points: 1}
+        - {op: gt, value: 0.55, points: -2}
+        - {op: lt, value: 0.30, points: -1}
+    - type: aspect_ratio
+      buckets:
+        square_1_1: 3
+        portrait_4_5: 2
+        story_9_16: -1
+    - type: scene_context
+      keywords: [party, beach, festival, club, nightlife, filter]
+      points: -4
+    - type: text_overlay
+      points: 2
