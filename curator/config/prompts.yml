@@ -1,0 +1,16 @@
+# Curator Bot v1.1 — prompts.yml
+# ============================================================================
+# PLACEHOLDER STUB — created by Agent A0 (Stage S-00).
+# OWNER: Agent A4 (Stage S-04) fills in the real prompt templates.
+#
+# Per PRD Sections 03/06/07, this file holds:
+#   - 6 platform output templates: post_caption (IG/FB), dating_bio (Tinder/Bumble),
+#     prompt_answer (Hinge), linkedin_post (LinkedIn)
+#   - the banned-phrase list for dating bios (e.g. 'love to laugh',
+#     'fluent in sarcasm', 'partner in crime', 'loves adventures',
+#     'looking for my person') — Rule C-09
+#   - the standard Hinge prompt library (10 prompts) — Rule C-10
+#   - the Tier 3 grading prompt + caption prompt architecture
+#
+# Do NOT add real templates here at S-00 — A4 owns the schema and content.
+# ============================================================================

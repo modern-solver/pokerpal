@@ -1,0 +1,15 @@
+# Curator Bot v1.1 — platform_weights.yml
+# ============================================================================
+# PLACEHOLDER STUB — created by Agent A0 (Stage S-00).
+# OWNER: Agent A2 (Stage S-02) fills in the real scoring profiles, and Agent A6
+# (Stage S-06) tunes weights against real photo samples.
+#
+# Per PRD Section 05, each of the 6 platforms gets a scoring profile covering:
+#   - grading-axis weight allocation (composition / lighting / technical / platform_fit)
+#   - platform-fit sub-rules (aspect ratio, saturation, face, etc.)
+#   - the CaptionAgent output format for that platform
+#
+# Tier 2 reads this file so weights tune without a code change. Do NOT add real
+# values here at S-00 — A2 owns the schema and values.
+# Platforms: instagram, facebook, tinder, bumble, hinge, linkedin
+# ============================================================================

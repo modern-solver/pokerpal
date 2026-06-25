@@ -1,0 +1,66 @@
+# Curator Bot v1.1 — .gitignore (Agent A0 / Stage S-00)
+# Governance rule #1 (KB hygiene): keep only durable source-of-truth in VCS.
+# Generated outputs, photo batches, transient logs, model caches, real secrets must NOT be committed.
+
+# --- Secrets ---
+.env
+.env.local
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Model weight caches / local model artifacts (BLIP-2 etc.) ---
+models/
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.onnx
+.cache/
+
+# --- Generated outputs (captions, ranked cards, exports) ---
+outputs/
+generated/
+*.out
+
+# --- Photo test batches (do NOT commit user/sample photos) ---
+photos/
+test_photos/
+sample_photos/
+*.jpg
+*.jpeg
+*.png
+*.heic
+*.webp
+
+# --- Databases (SQLite session store fallback) ---
+*.sqlite
+*.sqlite3
+*.db
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Scratch notebooks ---
+*.ipynb
+.ipynb_checkpoints/
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
