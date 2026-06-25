@@ -44,15 +44,22 @@ async def start(update, context):  # noqa: ANN001 - PTB callback signature
 
 
 def build_application(token: str):
-    """Build a python-telegram-bot Application with the /start handler registered.
+    """Build a python-telegram-bot Application with the S-01 handlers registered.
 
     Imported lazily so the module imports cleanly even if python-telegram-bot is
     not installed (e.g. lightweight test/CI environments).
+
+    A0 shipped only the minimal /start handler. A1 (Stage S-01) registers the full
+    conversation spine — /start with the 6-platform selector, the callback-query
+    handler for multi-select, the photo-receipt handler, and the free-text intent
+    router — via curator.bot.register_handlers.
     """
-    from telegram.ext import Application, CommandHandler
+    from telegram.ext import Application
+
+    from curator.bot import register_handlers
 
     application = Application.builder().token(token).build()
-    application.add_handler(CommandHandler("start", start))
+    register_handlers(application)
     return application
 
 

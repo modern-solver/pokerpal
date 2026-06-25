@@ -1,6 +1,25 @@
-"""BotAgent package — Telegram conversation spine.
+"""BotAgent package — Telegram conversation spine (Stage S-01, Agent A1).
 
-OWNER: Agent A1 (Stage S-01). A0 ships only a minimal /start handler in
-curator/main.py; A1 builds the full webhook handler, message router,
-6-platform selector, intent parsing, and photo-receipt handler here.
+Exposes the token-free `BotAgent` (handlers + router), the PTB handler registrar,
+and the platform-selector keyboard helpers.
 """
+
+from .agent import BotAgent, HandlerResult, START_MESSAGE
+from .handlers import register_handlers
+from .keyboards import (
+    PLATFORM_CALLBACK_PREFIX,
+    PLATFORMS_DONE_CALLBACK,
+    build_platform_keyboard,
+    platform_button_rows,
+)
+
+__all__ = [
+    "BotAgent",
+    "HandlerResult",
+    "START_MESSAGE",
+    "register_handlers",
+    "platform_button_rows",
+    "build_platform_keyboard",
+    "PLATFORM_CALLBACK_PREFIX",
+    "PLATFORMS_DONE_CALLBACK",
+]
