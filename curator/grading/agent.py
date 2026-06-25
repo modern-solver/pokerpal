@@ -21,10 +21,18 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence
 
 from ..session.schema import PLATFORMS, Session
+from .composite import attach_composite
 from .result import GradingResult, compute_tier3_eligible
+from .scene import SceneDescriptionService, SceneResult, derive_signals
 from .tier1 import PHASH_NEAR_DUPE_DISTANCE, PhotoMetadata, phash_distance
 from .tier2 import score_platform_fit
+from .tier3 import Tier3Grader, Tier3Score
 from .weights import get_weights
+
+# NOTE: composite/scene/tier3 are imported here but they DO NOT statically import
+# groq or transformers — those heavy clients are imported lazily, only when a real
+# Tier-3 call is actually made. The A2 zero-API guarantee (no network, no model
+# import on the Tier-1/2 path) is preserved: grade_batch never touches them.
 
 DATING_PLATFORMS = ("tinder", "bumble")
 
@@ -63,9 +71,20 @@ def _mean_fit(result: GradingResult) -> float:
 class GradingAgent:
     """Runs local Tiers 1+2 over a photo batch. No Tier 3, no API calls."""
 
-    def __init__(self, weights: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self,
+        weights: Optional[Dict[str, Any]] = None,
+        *,
+        tier3_grader: Optional[Tier3Grader] = None,
+        scene_service: Optional[SceneDescriptionService] = None,
+    ) -> None:
         # Loaded once; tunable from YAML without code change (A6).
         self.weights = weights or get_weights()
+        # Tier-3 dependencies are INJECTED so the whole semantic path is mockable
+        # without keys/network/heavy libs. They are only used by grade_tier3 /
+        # grade_full — grade_batch (Tiers 1+2) never touches them (zero-API).
+        self.scene_service = scene_service or SceneDescriptionService()
+        self.tier3_grader = tier3_grader
 
     # --- public API ---------------------------------------------------------
     def grade_batch(
@@ -136,6 +155,71 @@ class GradingAgent:
             "grade_session requires downloaded image bytes (A1/A3 wiring); A2 "
             "exposes grade_batch over pre-extracted metadata. See grade_batch."
         )
+
+    # --- Tier 3 + composite (Agent A3 / Stage S-03) -------------------------
+    def grade_tier3(
+        self,
+        results: Sequence[GradingResult],
+        image_bytes: Sequence[Optional[bytes]],
+        platforms: Sequence[str],
+    ) -> List[GradingResult]:
+        """Run Tier 3 (Groq vision) + composite over ALREADY-graded A2 results.
+
+        ONLY photos with ``tier3_eligible`` get a Groq call (PRD G-06/G-08) — the
+        Groq client is never invoked for blurry / low-res / dupe / face-gated
+        photos. For every result a per-platform ``composite`` is attached:
+          * eligible photos blend the Tier-3 4-axis score with Tier-2 platform_fit;
+          * ineligible photos fall back to the Tier-2 platform_fit (and G-08 face-
+            gated dating photos get composite_score = 2.0, set in composite.py).
+
+        ``image_bytes[i]`` aligns with ``results[i]``; None means "no bytes" (the
+        photo is then composited on Tier-2 fit alone). Mutates and returns results.
+        """
+        targets = [p for p in platforms if p in PLATFORMS]
+        n = len(results)
+        image_bytes = list(image_bytes) + [None] * (n - len(image_bytes))
+
+        for i, res in enumerate(results):
+            tier3: Optional[Tier3Score] = None
+            img = image_bytes[i] if i < len(image_bytes) else None
+
+            if res.tier3_eligible and img is not None and self.tier3_grader is not None:
+                fit_mean = _mean_fit(res) or None
+                # Reuse any scene description already attached (avoids a 2nd model run).
+                scene = None
+                if res.scene_description:
+                    scene = SceneResult(
+                        res.scene_description, "cached", res.signals or {}
+                    )
+                tier3 = self.tier3_grader.grade_photo(
+                    img, tier2_fit_mean=fit_mean, scene=scene
+                )
+                res.tier3 = tier3
+                # If the fallback produced a scene description, carry it forward.
+                if tier3.scene_description and not res.scene_description:
+                    res.scene_description = tier3.scene_description
+                    res.signals = {**res.signals, **(tier3.signals or {})}
+
+            attach_composite(res, tier3, targets, self.weights)
+
+        return results
+
+    def describe_scenes(
+        self, image_bytes: Sequence[Optional[bytes]]
+    ) -> List[SceneResult]:
+        """Generate BLIP-2 scene descriptions for a batch (local -> HF fallback).
+
+        Returns one SceneResult per image (empty/'none' for None bytes). The
+        descriptions + derived signals feed A2's Tier-2 scene/signal hooks (G-09
+        LinkedIn suitability, dating mood/activity) AND A4's caption prompt.
+        """
+        out: List[SceneResult] = []
+        for img in image_bytes:
+            if img is None:
+                out.append(SceneResult("", "none", {}))
+            else:
+                out.append(self.scene_service.describe(img))
+        return out
 
     # --- internals ----------------------------------------------------------
     def _grade_one(

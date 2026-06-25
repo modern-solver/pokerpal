@@ -55,6 +55,19 @@ class GradingResult:
     # API-call gate result (PRD G-06). True => A3 may run Tier 3 on this photo.
     tier3_eligible: bool = True
 
+    # --- Tier 3 (Agent A3 / Stage S-03) enrichment --------------------------
+    # The Tier-3 semantic score object (4 axes + provenance). None until Tier 3
+    # runs (or stays None for ineligible photos that skip the Groq call). Typed
+    # Any to avoid a hard import cycle with tier3.py.
+    tier3: Optional[Any] = None
+    # BLIP-2 scene-description string (1-2 sentences). Consumed by A4 (captions).
+    scene_description: str = ""
+    # Signals derived from the scene description (mood/sunglasses/text_overlay/
+    # activity) — feeds A2's Tier-2 signal hooks and surfaces to downstream stages.
+    signals: Dict[str, Any] = field(default_factory=dict)
+    # Per-platform composite score (Tier 1+2+3). Set by A3 composite aggregation.
+    composite: Dict[str, float] = field(default_factory=dict)
+
     def add_flag(self, flag: str) -> None:
         if flag not in self.flags:
             self.flags.append(flag)
@@ -77,6 +90,11 @@ class GradingResult:
             "flags": list(self.flags),
             "warnings": list(self.warnings),
             "tier3_eligible": self.tier3_eligible,
+            "tier3": self.tier3.axes() if self.tier3 is not None else None,
+            "tier3_source": getattr(self.tier3, "source", None),
+            "scene_description": self.scene_description,
+            "signals": dict(self.signals),
+            "composite": dict(self.composite),
         }
 
 
