@@ -15,8 +15,6 @@ verifies this is present and exercised. We prove it two ways:
 import socket
 import sys
 
-import pytest
-
 from curator.grading.agent import GradingAgent
 from curator.grading.tier1 import PhotoMetadata
 

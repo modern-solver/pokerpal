@@ -94,7 +94,7 @@ def test_is_expired_logic():
 def test_sweep_expired_counts():
     agent = SessionAgent()
     a = agent.init(1, ttl_seconds=0)
-    b = agent.init(2, ttl_seconds=10_000)
+    agent.init(2, ttl_seconds=10_000)
     a.updated_at = time.time() - 100
     agent.store.save(a)
     expired = agent.sweep_expired()

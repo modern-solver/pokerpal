@@ -13,7 +13,7 @@ commands themselves.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Union
+from typing import Optional, Sequence, Union
 
 from .card import FinalCard, OutputCard, RankedPhoto, render_variant
 

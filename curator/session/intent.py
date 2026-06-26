@@ -17,8 +17,6 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from .schema import PLATFORMS
-
 # Aliases mapped to canonical platform keys.
 _PLATFORM_ALIASES = {
     "instagram": "instagram",

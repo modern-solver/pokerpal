@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from ..session.schema import Session
 from .groq_text import GroqRateLimitError, TextGenerator
-from .hinge import is_library_prompt, select_hinge_prompt
+from .hinge import select_hinge_prompt
 from .prompts import (
     banned_phrases,
     get_prompts,

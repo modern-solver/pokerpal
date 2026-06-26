@@ -11,7 +11,6 @@ from curator.caption.result import CaptionVariant
 from curator.ranking.card import OutputCard, RankedPhoto, render_variant
 from curator.ranking.selection import (
     SelectionError,
-    build_final_card,
     cycle_variant,
     parse_choice,
     select,

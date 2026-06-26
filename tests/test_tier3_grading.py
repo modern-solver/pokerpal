@@ -13,8 +13,6 @@ Everything external (Groq vision + BLIP-2) is a stub passed via DI.
 
 import pytest
 
-from curator.grading.agent import GradingAgent
-from curator.grading.composite import G08_NO_FACE_COMPOSITE
 from curator.grading.groq_client import GroqRateLimitError
 from curator.grading.scene import (
     SceneDescriptionService,
@@ -24,7 +22,6 @@ from curator.grading.scene import (
 from curator.grading.tier1 import PhotoMetadata
 from curator.grading.tier3 import (
     Tier3Grader,
-    Tier3Score,
     estimate_axes_from_scene,
     parse_grading_json,
 )

@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from ..session.schema import PLATFORMS, Session
 from .composite import attach_composite
 from .result import GradingResult, compute_tier3_eligible
-from .scene import SceneDescriptionService, SceneResult, derive_signals
+from .scene import SceneDescriptionService, SceneResult
 from .tier1 import PHASH_NEAR_DUPE_DISTANCE, PhotoMetadata, phash_distance
 from .tier2 import score_platform_fit
 from .tier3 import Tier3Grader, Tier3Score

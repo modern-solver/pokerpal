@@ -13,7 +13,6 @@ from __future__ import annotations
 from typing import Optional
 
 from .agent import BotAgent, HandlerResult
-from .keyboards import build_platform_keyboard
 
 
 async def _reply(update, result: HandlerResult) -> None:

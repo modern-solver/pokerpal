@@ -178,7 +178,6 @@ class Tier3Grader:
             return self._fallback(image_bytes, tier2_fit_mean, scene, reason="no_vision")
 
         # --- attempt 1 + single retry on JSON parse failure (rule G-07) -----
-        last_err: Optional[Exception] = None
         for attempt in range(2):  # attempt 0 = first call, attempt 1 = the one retry
             try:
                 start = time.perf_counter()
@@ -191,8 +190,7 @@ class Tier3Grader:
                 )
             try:
                 axes = parse_grading_json(raw)
-            except ValueError as exc:
-                last_err = exc
+            except ValueError:
                 continue  # retry once, then fall through to fallback
             return Tier3Score(
                 **axes,

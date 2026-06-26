@@ -70,7 +70,7 @@ def test_phash_distance_unknown_is_none():
 
 def test_extract_metadata_on_synthetic_image():
     """Synthesise a small image in-memory (not committed) and extract metadata."""
-    Image = pytest.importorskip("PIL.Image")
+    pytest.importorskip("PIL.Image")
     from PIL import Image as PILImage
 
     img = PILImage.new("RGB", (1000, 1250), (200, 120, 60))  # warm-ish portrait

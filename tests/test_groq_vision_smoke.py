@@ -22,7 +22,7 @@ from curator.grading.tier3 import GROQ_LATENCY_BUDGET_S, parse_grading_json
 
 def _tiny_jpeg() -> bytes:
     """A small in-memory JPEG so the smoke test needs no committed image."""
-    PIL = pytest.importorskip("PIL", reason="Pillow not installed")
+    pytest.importorskip("PIL", reason="Pillow not installed")
     from PIL import Image  # noqa
 
     buf = io.BytesIO()

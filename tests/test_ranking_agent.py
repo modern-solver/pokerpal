@@ -12,8 +12,6 @@ Covers:
 All local — no keys, no network.
 """
 
-import pytest
-
 from curator.caption.result import CaptionResult, CaptionVariant
 from curator.grading.composite import G08_NO_FACE_COMPOSITE
 from curator.grading.result import GradingResult

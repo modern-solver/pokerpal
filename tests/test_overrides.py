@@ -11,8 +11,6 @@ Proves the review-gate items:
 
 from types import SimpleNamespace
 
-import pytest
-
 from curator.bot import BotAgent
 from curator.caption.result import CaptionVariant
 from curator.grading.result import GradingResult
