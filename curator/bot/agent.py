@@ -35,6 +35,7 @@ from curator.session.timeout import (
 )
 from curator.ranking.card import FinalCard, OutputCard
 from curator.ranking.presentation import (
+    format_card,
     format_cards,
     format_final_card,
     format_variant_prompt,
@@ -509,6 +510,18 @@ class BotAgent:
             text=format_cards(cards),
             kind="ranking_cards",
         )
+
+    def pending_card_views(self, user_id: int) -> List[tuple]:
+        """(file_id, caption) per ranked card, for sending photos in the chat."""
+        cards = self._pending_cards.get(user_id) or []
+        return [
+            (getattr(c.photo, "file_id", None), format_card(c)) for c in cards
+        ]
+
+    def active_platform_label(self, user_id: int) -> str:
+        """Human label of the platform currently being presented."""
+        key = self._active_platform.get(user_id, DEFAULT_PLATFORM)
+        return PLATFORM_LABELS.get(key, key)
 
     def handle_photo_selection(self, user_id: int, raw: Any) -> HandlerResult:
         """Handle a photo pick (1-based card number). Graceful on bad input."""
