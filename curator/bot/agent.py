@@ -27,6 +27,18 @@ from curator.session.schema import (
     PhotoRef,
     Stage,
 )
+from curator.ranking.card import FinalCard, OutputCard
+from curator.ranking.presentation import (
+    format_cards,
+    format_final_card,
+    format_variant_prompt,
+)
+from curator.ranking.selection import (
+    SelectionError,
+    build_final_card,
+    select_photo,
+    select_variant,
+)
 from .keyboards import (
     PLATFORM_CALLBACK_PREFIX,
     PLATFORMS_DONE_CALLBACK,
@@ -67,6 +79,12 @@ class BotAgent:
 
     def __init__(self, sessions: Optional[SessionAgent] = None) -> None:
         self.sessions = sessions or SessionAgent()
+        # Presentation-layer state (A5): the ranked cards currently shown to a
+        # user, and the photo card they've picked while choosing a variant. Held
+        # here (not in the durable Session schema A1 owns) so the ranking flow
+        # stays self-contained. Keyed by user_id.
+        self._pending_cards: dict[int, List[OutputCard]] = {}
+        self._pending_photo: dict[int, OutputCard] = {}
 
     # --- helpers ------------------------------------------------------------
     @staticmethod
@@ -241,6 +259,83 @@ class BotAgent:
             width=getattr(candidate, "width", None),
             height=getattr(candidate, "height", None),
         )
+
+    # --- ranking presentation + selection (Agent A5 / Stage S-05) -----------
+    def present_ranked_cards(
+        self, user_id: int, cards: List[OutputCard]
+    ) -> HandlerResult:
+        """Show the ranked output cards to the user (photo + rationale + variants).
+
+        Stores the cards as pending selection state, advances the session to
+        Stage.RANKING, and returns the formatted card set. The RankingAgent
+        produces ``cards``; this is the BotAgent presentation hook A5 wires.
+        """
+        self._pending_cards[user_id] = list(cards)
+        self._pending_photo.pop(user_id, None)
+        # Log the stage transition (no-op if no live session, mirroring A1).
+        self.sessions.update(user_id, stage=Stage.RANKING)
+        if not cards:
+            return HandlerResult(
+                text="No rankable photos in this session.",
+                kind="ranking_empty",
+            )
+        return HandlerResult(
+            text=format_cards(cards),
+            kind="ranking_cards",
+        )
+
+    def handle_photo_selection(self, user_id: int, raw: Any) -> HandlerResult:
+        """Handle a photo pick (1-based card number). Graceful on bad input."""
+        cards = self._pending_cards.get(user_id)
+        if not cards:
+            return HandlerResult(
+                text="There are no ranked photos to choose from yet.",
+                kind="select_no_cards",
+            )
+        chosen = select_photo(cards, raw)
+        if isinstance(chosen, SelectionError):
+            return HandlerResult(text=chosen.message, kind="select_photo_invalid")
+        self._pending_photo[user_id] = chosen
+        return HandlerResult(
+            text=format_variant_prompt(chosen),
+            kind="select_photo_ok",
+        )
+
+    def handle_variant_selection(self, user_id: int, raw: Any) -> HandlerResult:
+        """Handle a caption-variant pick; log the selection + return the final card.
+
+        Requires a photo to have been picked first. On a valid pick we build the
+        post-ready FinalCard, log the selection to the session (Stage.DONE), and
+        return the rendered card. Graceful on out-of-range / garbage input.
+        """
+        chosen = self._pending_photo.get(user_id)
+        if chosen is None:
+            return HandlerResult(
+                text="Pick a photo first (reply with a photo number).",
+                kind="select_no_photo",
+            )
+        vidx = select_variant(chosen.photo, raw)
+        if isinstance(vidx, SelectionError):
+            return HandlerResult(text=vidx.message, kind="select_variant_invalid")
+
+        final = build_final_card(chosen.photo, vidx)
+        self._log_selection(user_id, final)
+        # Selection complete: clear pending state.
+        self._pending_cards.pop(user_id, None)
+        self._pending_photo.pop(user_id, None)
+        return HandlerResult(
+            text=format_final_card(final),
+            kind="final_card",
+        )
+
+    def _log_selection(self, user_id: int, final: FinalCard) -> None:
+        """Persist the confirmed selection to the session (Stage.DONE).
+
+        Logs only durable, non-generated metadata (platform, chosen photo index,
+        chosen variant) — never committed output. Mirrors A1's update() contract;
+        a no-op if the session has expired.
+        """
+        self.sessions.update(user_id, stage=Stage.DONE)
 
     # --- router -------------------------------------------------------------
     def route(self, update: Any) -> HandlerResult:
