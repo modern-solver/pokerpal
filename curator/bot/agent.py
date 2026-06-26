@@ -50,6 +50,13 @@ from .keyboards import (
     PLATFORMS_DONE_CALLBACK,
     platform_button_rows,
 )
+from .faq import (
+    ABOUT_TEXT,
+    USER_GUIDE,
+    answer_question,
+    command_reference,
+    looks_like_question,
+)
 
 START_MESSAGE = (
     "Welcome to Curator Bot v1.1\n\n"
@@ -61,16 +68,10 @@ START_MESSAGE = (
 
 PLATFORM_PROMPT = "Which platforms are you posting to? Tap all that apply, then Done."
 
-# Override-command reference (A6 / S-06), shown in /start and on /help.
-COMMANDS_HELP = (
-    "Commands you can use while reviewing your cards:\n"
-    "  /next — show the next-ranked photo\n"
-    "  /retry — regenerate the caption (dating apps cycle tone in order)\n"
-    "  /shorter — rewrite the current caption under a tighter length cap\n"
-    "  /platform — switch the target platform and re-rank\n"
-    "  /reset — clear everything and start over\n"
-    "  /start — restart and pick platforms"
-)
+# Command reference shown in /start and /help. Single source of truth is
+# faq.BOT_COMMANDS (also used to register the Telegram command menu), so the
+# in-chat list and the BotFather menu never drift apart.
+COMMANDS_HELP = command_reference()
 
 # Expected total photos used for the progress indicator's denominator. The PRD
 # uses ~12-20 photos per session; we show "received X/N" where N is a soft target.
@@ -166,8 +167,12 @@ class BotAgent:
         )
 
     def handle_help(self, update: Any) -> HandlerResult:
-        """/help — list the override commands (A6 / S-06)."""
-        return HandlerResult(text=COMMANDS_HELP, kind="help")
+        """/help — the full usage walkthrough + command reference."""
+        return HandlerResult(text=f"{USER_GUIDE}\n\n{COMMANDS_HELP}", kind="help")
+
+    def handle_about(self, update: Any) -> HandlerResult:
+        """/about — capabilities and limitations."""
+        return HandlerResult(text=ABOUT_TEXT, kind="about")
 
     def handle_platform_callback(self, update: Any) -> HandlerResult:
         """Handle a platform-selector callback query (toggle or done)."""
@@ -218,6 +223,12 @@ class BotAgent:
             return HandlerResult(text="Send /start to begin.", kind="no_user")
 
         session = self.sessions.get_or_init(user_id)
+
+        # A question about how the bot works / its limits is answered directly
+        # (deterministic, zero-cost) rather than parsed as a posting intent.
+        if isinstance(text, str) and looks_like_question(text):
+            return HandlerResult(text=answer_question(text), kind="faq")
+
         intent = parse_intent(text)
 
         updates: dict = {}
@@ -240,7 +251,8 @@ class BotAgent:
             return HandlerResult(
                 text=(
                     "I didn't catch a platform, vibe, or constraint there. "
-                    "You can send photos any time, or /start to pick platforms."
+                    "You can send photos any time, /start to pick platforms, or "
+                    "/help and /about to learn what I do."
                 ),
                 kind="text_noop",
             )
@@ -763,6 +775,8 @@ class BotAgent:
     _COMMANDS = {
         "start": handle_start,
         "help": handle_help,
+        "commands": handle_help,
+        "about": handle_about,
         "next": handle_next,
         "retry": handle_retry,
         "shorter": handle_shorter,

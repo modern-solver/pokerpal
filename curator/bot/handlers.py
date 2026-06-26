@@ -68,6 +68,9 @@ def register_handlers(application, agent: Optional[BotAgent] = None) -> BotAgent
     async def on_help(update, context):  # noqa: ANN001
         await _reply(update, agent.handle_help(update))
 
+    async def on_about(update, context):  # noqa: ANN001
+        await _reply(update, agent.handle_about(update))
+
     async def on_next(update, context):  # noqa: ANN001
         await _reply(update, agent.handle_next(update))
 
@@ -85,6 +88,8 @@ def register_handlers(application, agent: Optional[BotAgent] = None) -> BotAgent
 
     application.add_handler(CommandHandler("start", on_start))
     application.add_handler(CommandHandler("help", on_help))
+    application.add_handler(CommandHandler("commands", on_help))
+    application.add_handler(CommandHandler("about", on_about))
     application.add_handler(CommandHandler("next", on_next))
     application.add_handler(CommandHandler("retry", on_retry))
     application.add_handler(CommandHandler("shorter", on_shorter))
