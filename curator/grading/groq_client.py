@@ -111,6 +111,47 @@ class GroqVisionGrader:
             raise
         return completion.choices[0].message.content or ""
 
+    def describe(self, image_bytes: bytes) -> str:
+        """One-sentence factual scene description for caption grounding.
+
+        Uses the same vision model as grading (no torch / BLIP-2 needed, which
+        suits the free-tier deploy). Returns "" on any failure so captioning can
+        proceed ungrounded rather than break the conversation.
+        """
+        try:
+            client = self._ensure_client()
+            data_url = _to_data_url(image_bytes)
+            completion = client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You describe photos in one short, factual sentence. "
+                            "No preamble, no quotes."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Describe this photo in one short sentence: "
+                                    "the subject, the setting, and the mood."
+                                ),
+                            },
+                            {"type": "image_url", "image_url": {"url": data_url}},
+                        ],
+                    },
+                ],
+                max_tokens=60,
+                temperature=0.2,
+            )
+            return (completion.choices[0].message.content or "").strip()
+        except Exception:  # noqa: BLE001 - description is best-effort
+            return ""
+
 
 def _is_rate_limit(exc: Exception) -> bool:
     """Best-effort detection of a Groq 429 across SDK versions."""

@@ -23,6 +23,7 @@ BOT_COMMANDS: List[Tuple[str, str]] = [
     ("start", "Restart and pick the platforms you're posting to"),
     ("help", "How to use me — the full walkthrough"),
     ("about", "What I can do, and my limits"),
+    ("done", "Finish sending photos — grade & rank them"),
     ("next", "Show the next-ranked photo"),
     ("retry", "Regenerate the current caption (dating apps cycle tone)"),
     ("shorter", "Rewrite the current caption shorter"),

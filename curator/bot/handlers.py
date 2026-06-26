@@ -10,6 +10,7 @@ across updates within a process.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from .agent import BotAgent, HandlerResult
@@ -74,8 +75,30 @@ def register_handlers(application, agent: Optional[BotAgent] = None) -> BotAgent
     async def on_photo(update, context):  # noqa: ANN001
         await _reply(update, agent.handle_photo(update))
 
+    async def _run_grading(update, context):  # noqa: ANN001
+        """Download the session's photos and grade+present (the async work).
+
+        Triggered when the agent returns kind="trigger_grading". The blocking
+        grade/caption/rank pipeline runs in a thread so the bot stays responsive.
+        """
+        uid = agent._user_id(update)
+        session = agent.sessions.get(uid) if uid is not None else None
+        images: dict = {}
+        if session is not None:
+            for ph in session.photos:
+                try:
+                    tg_file = await context.bot.get_file(ph.file_id)
+                    images[ph.file_id] = bytes(await tg_file.download_as_bytearray())
+                except Exception:  # noqa: BLE001 - skip a photo we can't fetch
+                    continue
+        result = await asyncio.to_thread(agent.grade_and_present, uid, images)
+        await _reply(update, result)
+
     async def on_text(update, context):  # noqa: ANN001
-        await _reply(update, agent.handle_text(update))
+        result = agent.handle_text(update)
+        await _reply(update, result)
+        if result.kind == "trigger_grading":
+            await _run_grading(update, context)
 
     # Override commands (A6 / S-06). Each routes through the token-free BotAgent.
     async def on_help(update, context):  # noqa: ANN001
@@ -83,6 +106,12 @@ def register_handlers(application, agent: Optional[BotAgent] = None) -> BotAgent
 
     async def on_about(update, context):  # noqa: ANN001
         await _reply(update, agent.handle_about(update))
+
+    async def on_done(update, context):  # noqa: ANN001
+        result = agent.handle_done(update)
+        await _reply(update, result)
+        if result.kind == "trigger_grading":
+            await _run_grading(update, context)
 
     async def on_next(update, context):  # noqa: ANN001
         await _reply(update, agent.handle_next(update))
@@ -103,6 +132,7 @@ def register_handlers(application, agent: Optional[BotAgent] = None) -> BotAgent
     application.add_handler(CommandHandler("help", on_help))
     application.add_handler(CommandHandler("commands", on_help))
     application.add_handler(CommandHandler("about", on_about))
+    application.add_handler(CommandHandler("done", on_done))
     application.add_handler(CommandHandler("next", on_next))
     application.add_handler(CommandHandler("retry", on_retry))
     application.add_handler(CommandHandler("shorter", on_shorter))

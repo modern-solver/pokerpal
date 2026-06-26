@@ -16,8 +16,9 @@ Responsibilities (S-01 only):
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 from curator.session import SessionAgent
 from curator.session.intent import parse_intent
@@ -77,6 +78,16 @@ COMMANDS_HELP = command_reference()
 # uses ~12-20 photos per session; we show "received X/N" where N is a soft target.
 EXPECTED_PHOTOS = 12
 
+# Default platform when a session somehow has none selected.
+DEFAULT_PLATFORM = "instagram"
+
+# Phrases that mean "I'm finished sending photos — grade them now."
+_DONE_WORDS = {
+    "done", "im done", "i'm done", "all done", "finished", "finish", "go",
+    "ready", "rank", "rank them", "grade", "grade them", "that's all",
+    "thats all", "go ahead", "ok done", "okay done", "that is all",
+}
+
 
 @dataclass
 class HandlerResult:
@@ -101,6 +112,7 @@ class BotAgent:
         *,
         caption_agent: Any = None,
         ranking_agent: Any = None,
+        grading_agent: Any = None,
         clock: Any = None,
     ) -> None:
         self.sessions = sessions or SessionAgent()
@@ -126,6 +138,10 @@ class BotAgent:
         # first use (deterministic local-fallback CaptionAgent: no Groq, no key).
         self._caption_agent = caption_agent
         self._ranking_agent = ranking_agent
+        self._grading_agent = grading_agent
+        # Shared Groq vision client (Tier-3 grading + scene description), built
+        # lazily from GROQ_API_KEY; None when no key (local-only fallback).
+        self._vision = None
         # Injectable clock for deterministic timeout-warning tests.
         self._clock = clock
         # Users already warned in the current expiry window (de-dupe the nag).
@@ -173,6 +189,103 @@ class BotAgent:
     def handle_about(self, update: Any) -> HandlerResult:
         """/about — capabilities and limitations."""
         return HandlerResult(text=ABOUT_TEXT, kind="about")
+
+    def handle_done(self, update: Any) -> HandlerResult:
+        """/done — finish collecting photos and start grading.
+
+        Returns kind="trigger_grading" when there are photos; the PTB layer then
+        downloads them and calls grade_and_present. Token-free + testable here.
+        """
+        user_id = self._user_id(update)
+        if user_id is None:
+            return HandlerResult(text="Send /start to begin.", kind="no_user")
+        session = self.sessions.get_or_init(user_id)
+        if not session.photos:
+            return HandlerResult(
+                text="Send me at least one photo first, then /done.",
+                kind="done_no_photos",
+            )
+        return HandlerResult(
+            text="Got it — grading your photos now, this takes a few seconds…",
+            kind="trigger_grading",
+        )
+
+    def _is_done_signal(self, text: str) -> bool:
+        """True if free text means 'finish and grade' (e.g. 'done', "that's all")."""
+        t = " ".join((text or "").lower().split()).strip(" .!?")
+        return t in _DONE_WORDS
+
+    def _handle_ranking_reply(self, user_id: int, text: Any) -> HandlerResult:
+        """Route a reply while ranked cards are shown: photo pick, then variant."""
+        if self._pending_photo.get(user_id) is None:
+            return self.handle_photo_selection(user_id, text)
+        return self.handle_variant_selection(user_id, text)
+
+    def grade_and_present(
+        self, user_id: int, images: Dict[str, bytes]
+    ) -> HandlerResult:
+        """Grade the session's downloaded photos and present ranked cards.
+
+        ``images`` maps file_id -> bytes (downloaded by the PTB layer). Builds the
+        grading/caption agents (Groq-backed when GROQ_API_KEY is set, otherwise a
+        local fallback), runs the pipeline, and hands the cards to
+        present_ranked_cards. Failures degrade to a friendly message rather than a
+        silent bot.
+        """
+        session = self.sessions.get_or_init(user_id)
+        refs: List[Any] = []
+        byts: List[bytes] = []
+        for ph in session.photos:
+            data = images.get(ph.file_id) if images else None
+            if data:
+                refs.append(ph)
+                byts.append(data)
+        if not byts:
+            return HandlerResult(
+                text="I couldn't read any of those photos — send a few clear ones, then /done.",
+                kind="grade_no_photos",
+            )
+
+        platforms = [p for p in (session.platforms or []) if p in PLATFORMS] or [
+            DEFAULT_PLATFORM
+        ]
+        target = self._active_platform.get(user_id) or platforms[0]
+
+        try:
+            from .pipeline import run_pipeline
+
+            cards, results, captions = run_pipeline(
+                byts,
+                refs,
+                platforms,
+                target,
+                grading_agent=self._grading(),
+                caption_agent=self._caption(),
+                ranking_agent=self._ranking(),
+                describe=self._describe_fn(),
+                vibe=session.vibe,
+                constraints=list(session.constraints),
+                top_n=3,
+            )
+        except Exception:  # noqa: BLE001 - never crash the conversation
+            return HandlerResult(
+                text=(
+                    "Something went wrong while grading those — please /reset and "
+                    "try again."
+                ),
+                kind="grade_error",
+            )
+
+        if not cards:
+            return HandlerResult(
+                text="I couldn't rank those — try clearer shots and /done again.",
+                kind="ranking_empty",
+            )
+        intro = f"Done! Here are your best shots for {PLATFORM_LABELS.get(target, target)}.\n\n"
+        card = self.present_ranked_cards(
+            user_id, cards, results=results, captions=captions, platform=target
+        )
+        return HandlerResult(text=intro + card.text, kind=card.kind)
 
     def handle_platform_callback(self, update: Any) -> HandlerResult:
         """Handle a platform-selector callback query (toggle or done)."""
@@ -229,6 +342,25 @@ class BotAgent:
         if isinstance(text, str) and looks_like_question(text):
             return HandlerResult(text=answer_question(text), kind="faq")
 
+        # While reviewing ranked cards, a reply is a selection (photo then
+        # caption number), not a new posting intent.
+        if session.stage == Stage.RANKING:
+            return self._handle_ranking_reply(user_id, text)
+
+        # "done" (and friends) finishes the photo-collection step and kicks off
+        # grading. The PTB layer sees kind="trigger_grading", downloads the
+        # photos, and calls grade_and_present (the async work it owns).
+        if isinstance(text, str) and self._is_done_signal(text):
+            if not session.photos:
+                return HandlerResult(
+                    text="Send me at least one photo first, then say 'done'.",
+                    kind="done_no_photos",
+                )
+            return HandlerResult(
+                text="Got it — grading your photos now, this takes a few seconds…",
+                kind="trigger_grading",
+            )
+
         intent = parse_intent(text)
 
         updates: dict = {}
@@ -267,7 +399,13 @@ class BotAgent:
             parts.append(f"vibe: {intent.vibe}")
         if intent.constraints:
             parts.append("constraints: " + ", ".join(intent.constraints))
-        return HandlerResult(text="Got it — " + "; ".join(parts) + ".", kind="text_intent")
+        nudge = (
+            " Now send me your photos (a batch works best) — say 'done' or /done "
+            "when you're finished and I'll grade and rank them."
+        )
+        return HandlerResult(
+            text="Got it — " + "; ".join(parts) + "." + nudge, kind="text_intent"
+        )
 
     def handle_photo(self, update: Any) -> HandlerResult:
         """Intake a photo: store its reference + acknowledge with progress.
@@ -288,9 +426,13 @@ class BotAgent:
 
         self.sessions.get_or_init(user_id)
         session = self.sessions.add_photo(user_id, photo)
+        self.sessions.update(user_id, stage=Stage.RECEIVING_PHOTOS)
         count = len(session.photos)
         return HandlerResult(
-            text=f"Received {count}/{EXPECTED_PHOTOS} photos. Keep them coming, or say 'done'.",
+            text=(
+                f"Received {count}/{EXPECTED_PHOTOS} photos. Send more, or say "
+                "'done' (or /done) and I'll grade and rank them."
+            ),
             kind="photo_received",
         )
 
@@ -435,12 +577,55 @@ class BotAgent:
         ):
             store.pop(user_id, None)
 
+    @staticmethod
+    def _groq_key() -> Optional[str]:
+        key = os.environ.get("GROQ_API_KEY")
+        return key or None
+
+    def _vision_grader(self):
+        """Lazily build a shared Groq vision client (grading + scene describe)."""
+        if self._vision is None:
+            key = self._groq_key()
+            if not key:
+                return None
+            from curator.grading.groq_client import GroqVisionGrader
+
+            self._vision = GroqVisionGrader(api_key=key)
+        return self._vision
+
+    def _grading(self):
+        """Lazily build the GradingAgent (Groq Tier-3 when GROQ_API_KEY is set)."""
+        if self._grading_agent is None:
+            from curator.grading.agent import GradingAgent
+            from curator.grading.scene import SceneDescriptionService
+            from curator.grading.tier3 import Tier3Grader
+
+            vision = self._vision_grader()
+            tier3 = (
+                Tier3Grader(vision, SceneDescriptionService())
+                if vision is not None
+                else None
+            )
+            self._grading_agent = GradingAgent(tier3_grader=tier3)
+        return self._grading_agent
+
+    def _describe_fn(self):
+        """A callable(bytes)->str for caption grounding, or None without a key."""
+        vision = self._vision_grader()
+        return vision.describe if vision is not None else None
+
     def _caption(self):
-        """Lazily build the CaptionAgent (local-fallback: no Groq, no key)."""
+        """Lazily build the CaptionAgent (Groq when keyed, else local fallback)."""
         if self._caption_agent is None:
             from curator.caption.agent import CaptionAgent
 
-            self._caption_agent = CaptionAgent()
+            generator = None
+            key = self._groq_key()
+            if key:
+                from curator.caption.groq_text import GroqTextGenerator
+
+                generator = GroqTextGenerator(api_key=key)
+            self._caption_agent = CaptionAgent(generator=generator)
         return self._caption_agent
 
     def _ranking(self):
@@ -777,6 +962,7 @@ class BotAgent:
         "help": handle_help,
         "commands": handle_help,
         "about": handle_about,
+        "done": handle_done,
         "next": handle_next,
         "retry": handle_retry,
         "shorter": handle_shorter,
