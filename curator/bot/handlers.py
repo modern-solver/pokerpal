@@ -65,7 +65,32 @@ def register_handlers(application, agent: Optional[BotAgent] = None) -> BotAgent
     async def on_text(update, context):  # noqa: ANN001
         await _reply(update, agent.handle_text(update))
 
+    # Override commands (A6 / S-06). Each routes through the token-free BotAgent.
+    async def on_help(update, context):  # noqa: ANN001
+        await _reply(update, agent.handle_help(update))
+
+    async def on_next(update, context):  # noqa: ANN001
+        await _reply(update, agent.handle_next(update))
+
+    async def on_retry(update, context):  # noqa: ANN001
+        await _reply(update, agent.handle_retry(update))
+
+    async def on_shorter(update, context):  # noqa: ANN001
+        await _reply(update, agent.handle_shorter(update))
+
+    async def on_platform(update, context):  # noqa: ANN001
+        await _reply(update, agent.handle_platform(update))
+
+    async def on_reset(update, context):  # noqa: ANN001
+        await _reply(update, agent.handle_reset(update))
+
     application.add_handler(CommandHandler("start", on_start))
+    application.add_handler(CommandHandler("help", on_help))
+    application.add_handler(CommandHandler("next", on_next))
+    application.add_handler(CommandHandler("retry", on_retry))
+    application.add_handler(CommandHandler("shorter", on_shorter))
+    application.add_handler(CommandHandler("platform", on_platform))
+    application.add_handler(CommandHandler("reset", on_reset))
     application.add_handler(CallbackQueryHandler(on_callback))
     application.add_handler(MessageHandler(filters.PHOTO, on_photo))
     application.add_handler(

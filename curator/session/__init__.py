@@ -15,6 +15,13 @@ from .schema import (
     Stage,
 )
 from .store import InMemorySessionStore, SessionStore, SQLiteSessionStore
+from .timeout import (
+    WARN_BEFORE_SECONDS,
+    WARNING_MESSAGE,
+    TimeoutStatus,
+    check_timeout,
+    expires_at,
+)
 
 __all__ = [
     "SessionAgent",
@@ -30,4 +37,9 @@ __all__ = [
     "SessionStore",
     "InMemorySessionStore",
     "SQLiteSessionStore",
+    "TimeoutStatus",
+    "check_timeout",
+    "expires_at",
+    "WARN_BEFORE_SECONDS",
+    "WARNING_MESSAGE",
 ]

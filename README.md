@@ -43,6 +43,23 @@ Build process / agent rulebook: [`docs/dev_agents_v1.1.md`](docs/dev_agents_v1.1
 
 ---
 
+## Bot commands
+
+| Command | What it does |
+|---|---|
+| `/start` | Restart the flow and pick target platforms. |
+| `/help` | List the commands below. |
+| `/next` | Show the next-ranked photo/card. |
+| `/retry` | Regenerate the caption. On dating platforms this **cycles tone variants in order** (e.g. Tinder: Playful → Confident → Mysterious, rule C-07) — not a random reseed. |
+| `/shorter` | Rewrite the current caption under a tighter length cap. |
+| `/platform <name>` | Switch the active target platform and re-rank (e.g. `/platform tinder`). No re-grading. |
+| `/reset` | Clear the session's working state and start over. |
+
+While a session is within **15 minutes** of its TTL expiry, the bot surfaces a
+timeout warning so you can keep it alive or `/reset`.
+
+---
+
 ## Repository layout
 
 ```
@@ -122,6 +139,19 @@ The test suite includes:
 
 The handshake/load tests are designed to **pass-as-skip** on a clean install with no
 credentials, and to actually exercise the providers once keys are present.
+
+---
+
+## Deployment (Railway free tier)
+
+The bot runs as a **long-polling worker** (`python -m curator.main`); no inbound
+HTTP port is needed. Deploy config is committed: `Procfile`, `railway.json`,
+`runtime.txt` / `.python-version`. Secrets (`TELEGRAM_TOKEN`, `GROQ_API_KEY`,
+optionally `HF_TOKEN`) are set in Railway's variables UI — never committed.
+
+Full runbook and the remaining live steps (BotFather registration, setting
+secrets, deploy, smoke-verify, weights tuning, tagging `v1.1.0`):
+[`docs/DEPLOY.md`](docs/DEPLOY.md).
 
 ---
 

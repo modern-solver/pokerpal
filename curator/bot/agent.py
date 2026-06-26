@@ -17,7 +17,7 @@ Responsibilities (S-01 only):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Sequence
 
 from curator.session import SessionAgent
 from curator.session.intent import parse_intent
@@ -26,6 +26,11 @@ from curator.session.schema import (
     PLATFORMS,
     PhotoRef,
     Stage,
+)
+from curator.session.timeout import (
+    WARNING_MESSAGE,
+    TimeoutStatus,
+    check_timeout,
 )
 from curator.ranking.card import FinalCard, OutputCard
 from curator.ranking.presentation import (
@@ -36,6 +41,7 @@ from curator.ranking.presentation import (
 from curator.ranking.selection import (
     SelectionError,
     build_final_card,
+    cycle_variant,
     select_photo,
     select_variant,
 )
@@ -54,6 +60,17 @@ START_MESSAGE = (
 )
 
 PLATFORM_PROMPT = "Which platforms are you posting to? Tap all that apply, then Done."
+
+# Override-command reference (A6 / S-06), shown in /start and on /help.
+COMMANDS_HELP = (
+    "Commands you can use while reviewing your cards:\n"
+    "  /next — show the next-ranked photo\n"
+    "  /retry — regenerate the caption (dating apps cycle tone in order)\n"
+    "  /shorter — rewrite the current caption under a tighter length cap\n"
+    "  /platform — switch the target platform and re-rank\n"
+    "  /reset — clear everything and start over\n"
+    "  /start — restart and pick platforms"
+)
 
 # Expected total photos used for the progress indicator's denominator. The PRD
 # uses ~12-20 photos per session; we show "received X/N" where N is a soft target.
@@ -77,7 +94,14 @@ class HandlerResult:
 class BotAgent:
     """Stateless-ish conversation handler over a SessionAgent."""
 
-    def __init__(self, sessions: Optional[SessionAgent] = None) -> None:
+    def __init__(
+        self,
+        sessions: Optional[SessionAgent] = None,
+        *,
+        caption_agent: Any = None,
+        ranking_agent: Any = None,
+        clock: Any = None,
+    ) -> None:
         self.sessions = sessions or SessionAgent()
         # Presentation-layer state (A5): the ranked cards currently shown to a
         # user, and the photo card they've picked while choosing a variant. Held
@@ -85,6 +109,26 @@ class BotAgent:
         # stays self-contained. Keyed by user_id.
         self._pending_cards: dict[int, List[OutputCard]] = {}
         self._pending_photo: dict[int, OutputCard] = {}
+        # Override-command state (A6 / S-06). To re-rank on /platform and advance
+        # on /next without re-grading, we cache the per-user grading results +
+        # caption results + the active platform + a /next cursor + the current
+        # /retry tone-cycle index per card. All in-memory (never persisted), so
+        # nothing generated is committed.
+        self._pending_results: dict[int, List[Any]] = {}
+        self._pending_captions: dict[int, List[Any]] = {}
+        self._active_platform: dict[int, str] = {}
+        self._next_cursor: dict[int, int] = {}
+        self._retry_idx: dict[int, int] = {}
+        # Lazily-constructed CaptionAgent / RankingAgent used by /retry, /shorter,
+        # and /platform. Injectable for tests; never imported eagerly so the
+        # zero-API guarantee and lazy-client posture hold. ``None`` => build on
+        # first use (deterministic local-fallback CaptionAgent: no Groq, no key).
+        self._caption_agent = caption_agent
+        self._ranking_agent = ranking_agent
+        # Injectable clock for deterministic timeout-warning tests.
+        self._clock = clock
+        # Users already warned in the current expiry window (de-dupe the nag).
+        self._warned: set = set()
 
     # --- helpers ------------------------------------------------------------
     @staticmethod
@@ -112,13 +156,18 @@ class BotAgent:
         user_id = self._user_id(update)
         if user_id is None:
             return HandlerResult(text=START_MESSAGE, kind="start")
+        self._clear_override_state(user_id)
         session = self.sessions.init(user_id)
         self.sessions.update(user_id, stage=Stage.SELECTING_PLATFORMS)
         return HandlerResult(
-            text=f"{START_MESSAGE}\n\n{PLATFORM_PROMPT}",
+            text=f"{START_MESSAGE}\n\n{COMMANDS_HELP}\n\n{PLATFORM_PROMPT}",
             kind="start",
             keyboard_rows=platform_button_rows(session.platforms),
         )
+
+    def handle_help(self, update: Any) -> HandlerResult:
+        """/help — list the override commands (A6 / S-06)."""
+        return HandlerResult(text=COMMANDS_HELP, kind="help")
 
     def handle_platform_callback(self, update: Any) -> HandlerResult:
         """Handle a platform-selector callback query (toggle or done)."""
@@ -262,16 +311,39 @@ class BotAgent:
 
     # --- ranking presentation + selection (Agent A5 / Stage S-05) -----------
     def present_ranked_cards(
-        self, user_id: int, cards: List[OutputCard]
+        self,
+        user_id: int,
+        cards: List[OutputCard],
+        *,
+        results: Optional[Sequence[Any]] = None,
+        captions: Optional[Sequence[Any]] = None,
+        platform: Optional[str] = None,
     ) -> HandlerResult:
         """Show the ranked output cards to the user (photo + rationale + variants).
 
         Stores the cards as pending selection state, advances the session to
         Stage.RANKING, and returns the formatted card set. The RankingAgent
         produces ``cards``; this is the BotAgent presentation hook A5 wires.
+
+        A6 additionally caches the source ``results`` (GradingResults) +
+        ``captions`` (CaptionResults) + active ``platform`` so the override
+        commands (/next, /platform, /retry, /shorter) can re-rank / regenerate
+        WITHOUT re-grading. These are optional so A5's existing call sites keep
+        working; the override commands degrade gracefully when they're absent.
         """
         self._pending_cards[user_id] = list(cards)
         self._pending_photo.pop(user_id, None)
+        self._next_cursor[user_id] = 0
+        self._retry_idx.pop(user_id, None)
+        if results is not None:
+            self._pending_results[user_id] = list(results)
+        if captions is not None:
+            self._pending_captions[user_id] = list(captions)
+        if platform is not None:
+            self._active_platform[user_id] = platform
+        elif cards:
+            # Infer the active platform from the cards if not given.
+            self._active_platform[user_id] = cards[0].photo.platform
         # Log the stage transition (no-op if no live session, mirroring A1).
         self.sessions.update(user_id, stage=Stage.RANKING)
         if not cards:
@@ -337,6 +409,307 @@ class BotAgent:
         """
         self.sessions.update(user_id, stage=Stage.DONE)
 
+    # --- override commands (Agent A6 / Stage S-06) --------------------------
+    def _clear_override_state(self, user_id: int) -> None:
+        """Drop ALL in-memory working state for a user (used by /reset, /start)."""
+        for store in (
+            self._pending_cards,
+            self._pending_photo,
+            self._pending_results,
+            self._pending_captions,
+            self._active_platform,
+            self._next_cursor,
+            self._retry_idx,
+        ):
+            store.pop(user_id, None)
+
+    def _caption(self):
+        """Lazily build the CaptionAgent (local-fallback: no Groq, no key)."""
+        if self._caption_agent is None:
+            from curator.caption.agent import CaptionAgent
+
+            self._caption_agent = CaptionAgent()
+        return self._caption_agent
+
+    def _ranking(self):
+        """Lazily build the RankingAgent (pure, local — no network)."""
+        if self._ranking_agent is None:
+            from curator.ranking.agent import RankingAgent
+
+            self._ranking_agent = RankingAgent()
+        return self._ranking_agent
+
+    def _current_card(self, user_id: int) -> Optional[OutputCard]:
+        """The card currently in focus: the picked photo, else the top card."""
+        chosen = self._pending_photo.get(user_id)
+        if chosen is not None:
+            return chosen
+        cards = self._pending_cards.get(user_id)
+        if cards:
+            return cards[0]
+        return None
+
+    def handle_next(self, update: Any) -> HandlerResult:
+        """/next — advance to the next-ranked photo/card (A5 ranked cards).
+
+        Walks the already-ranked OutputCard list via an in-memory cursor. Validates
+        state (no cards yet / past the end) and degrades gracefully.
+        """
+        user_id = self._user_id(update)
+        if user_id is None:
+            return HandlerResult(text="Send /start to begin.", kind="no_user")
+        cards = self._pending_cards.get(user_id)
+        if not cards:
+            return HandlerResult(
+                text="There are no ranked photos yet — send photos first.",
+                kind="next_no_cards",
+            )
+        cursor = self._next_cursor.get(user_id, 0) + 1
+        if cursor >= len(cards):
+            return HandlerResult(
+                text="That's the last ranked photo. /reset to start over.",
+                kind="next_exhausted",
+            )
+        self._next_cursor[user_id] = cursor
+        card = cards[cursor]
+        # Focus this card for subsequent /retry, /shorter, variant pick.
+        self._pending_photo[user_id] = card
+        self._retry_idx.pop(user_id, None)
+        from curator.ranking.presentation import format_card
+
+        return HandlerResult(text=format_card(card), kind="next_card")
+
+    def handle_retry(self, update: Any) -> HandlerResult:
+        """/retry — regenerate the caption.
+
+        For dating platforms (rule C-07) this CYCLES tone variants IN ORDER
+        (Playful -> Confident -> Mysterious for Tinder, etc.) using A5's
+        ``cycle_variant`` over A4's tone order — NOT a random reseed. For other
+        platforms it likewise steps to the next available tone variant in order.
+        """
+        user_id = self._user_id(update)
+        if user_id is None:
+            return HandlerResult(text="Send /start to begin.", kind="no_user")
+        card = self._current_card(user_id)
+        if card is None:
+            return HandlerResult(
+                text="Nothing to retry yet — pick a photo first.",
+                kind="retry_no_card",
+            )
+        photo = card.photo
+        if not photo.variants:
+            return HandlerResult(
+                text="No caption options are available for that photo.",
+                kind="retry_no_variants",
+            )
+        current = self._retry_idx.get(user_id, 0)
+        nxt = cycle_variant(photo, current)
+        self._retry_idx[user_id] = nxt
+        variant = photo.variants[nxt]
+        from curator.ranking.card import render_variant
+
+        return HandlerResult(
+            text=(
+                f"[{variant.tone}] {render_variant(variant)}"
+            ),
+            kind="retry_cycled",
+        )
+
+    def handle_shorter(self, update: Any) -> HandlerResult:
+        """/shorter — regenerate the current caption under a tighter length cap.
+
+        Re-runs CaptionAgent for the focused photo+platform with a tighter cap
+        (re-using A4; never reimplementing generation). Replaces the focused
+        card's current variant with the shorter one so /retry continues from it.
+        """
+        user_id = self._user_id(update)
+        if user_id is None:
+            return HandlerResult(text="Send /start to begin.", kind="no_user")
+        card = self._current_card(user_id)
+        if card is None:
+            return HandlerResult(
+                text="Nothing to shorten yet — pick a photo first.",
+                kind="shorter_no_card",
+            )
+        photo = card.photo
+        if not photo.variants:
+            return HandlerResult(
+                text="No caption to shorten for that photo.",
+                kind="shorter_no_variants",
+            )
+        idx = self._retry_idx.get(user_id, 0)
+        idx = idx if 0 <= idx < len(photo.variants) else 0
+        current = photo.variants[idx]
+        original_len = current.char_count
+        tighter_cap = self._tighter_cap(original_len)
+
+        session = self.sessions.get(user_id)
+        try:
+            result = self._caption().generate(
+                photo.platform,
+                photo.breakdown.get("scene_description", "") if photo.breakdown else "",
+                session=session,
+                photo_index=photo.photo_index,
+                tones=[current.tone],
+            )
+        except Exception:  # noqa: BLE001 - never crash the command
+            return HandlerResult(
+                text="Couldn't shorten the caption right now — try /retry.",
+                kind="shorter_failed",
+            )
+        if not result.variants:
+            return HandlerResult(
+                text="Couldn't shorten the caption right now — try /retry.",
+                kind="shorter_failed",
+            )
+        new_variant = result.variants[0]
+        # Enforce the tighter cap on the primary text (A4 trims to platform cap;
+        # we additionally clamp to the tighter target so the cap is provably met).
+        new_variant = self._clamp_variant(new_variant, tighter_cap)
+        photo.variants[idx] = new_variant
+        from curator.ranking.card import render_variant
+
+        return HandlerResult(
+            text=(
+                f"Shorter ({new_variant.char_count}/{tighter_cap} chars):\n"
+                f"[{new_variant.tone}] {render_variant(new_variant)}"
+            ),
+            kind="shorter_ok",
+        )
+
+    @staticmethod
+    def _tighter_cap(original_len: int) -> int:
+        """A tighter length cap: ~75% of the current length, floored sensibly."""
+        target = int(original_len * 0.75)
+        return max(20, min(original_len - 1 if original_len > 1 else 1, target))
+
+    @staticmethod
+    def _clamp_variant(variant: Any, cap: int) -> Any:
+        """Clamp a CaptionVariant's primary text + payload to ``cap`` chars."""
+        from curator.caption.agent import _PRIMARY_KEY, _trim_to
+
+        text = variant.text or ""
+        if len(text) > cap:
+            text = _trim_to(text, cap)
+        variant.text = text
+        variant.char_count = len(text)
+        variant.trimmed = True
+        key = _PRIMARY_KEY.get(variant.output_mode)
+        if key and isinstance(variant.payload, dict):
+            variant.payload[key] = text
+            variant.payload["char_count"] = len(text)
+        return variant
+
+    def handle_platform(self, update: Any) -> HandlerResult:
+        """/platform — switch the active target platform and re-rank/re-present.
+
+        Accepts the new platform from the command argument (e.g. "/platform
+        tinder"). Re-ranks the cached grading results + captions for the new
+        platform via the RankingAgent (no re-grading). Validates the platform and
+        that there is rankable state.
+        """
+        user_id = self._user_id(update)
+        if user_id is None:
+            return HandlerResult(text="Send /start to begin.", kind="no_user")
+        arg = self._command_arg(update)
+        if not arg:
+            options = ", ".join(PLATFORM_LABELS[p] for p in PLATFORMS)
+            return HandlerResult(
+                text=f"Which platform? Reply e.g. /platform tinder. Options: {options}.",
+                kind="platform_need_arg",
+            )
+        key = arg.strip().lower()
+        if key not in PLATFORMS:
+            return HandlerResult(
+                text=f"'{arg}' isn't a platform I know. Try one of: "
+                + ", ".join(PLATFORMS)
+                + ".",
+                kind="platform_unknown",
+            )
+        results = self._pending_results.get(user_id)
+        if not results:
+            return HandlerResult(
+                text="No graded photos to re-rank yet — send photos first.",
+                kind="platform_no_results",
+            )
+        captions = self._pending_captions.get(user_id)
+        cards = self._ranking().build_cards(key, results, captions)
+        # Track the platform in the durable session too (additive to platforms).
+        session = self.sessions.get(user_id)
+        if session is not None and key not in session.platforms:
+            self.sessions.update(user_id, platforms=session.platforms + [key])
+        present = self.present_ranked_cards(
+            user_id, cards, results=results, captions=captions, platform=key
+        )
+        label = PLATFORM_LABELS[key]
+        if present.kind == "ranking_empty":
+            return HandlerResult(
+                text=f"No rankable photos for {label}.",
+                kind="platform_switched_empty",
+            )
+        return HandlerResult(
+            text=f"Switched to {label}.\n\n{present.text}",
+            kind="platform_switched",
+        )
+
+    def handle_reset(self, update: Any) -> HandlerResult:
+        """/reset — clear the session's working state and start over."""
+        user_id = self._user_id(update)
+        if user_id is None:
+            return HandlerResult(text="Send /start to begin.", kind="no_user")
+        self._clear_override_state(user_id)
+        # Re-init the durable session to a clean slate (A1 lifecycle).
+        self.sessions.init(user_id)
+        self.sessions.update(user_id, stage=Stage.SELECTING_PLATFORMS)
+        return HandlerResult(
+            text="Reset done — your session is clear. Send /start to pick platforms "
+            "and begin again.",
+            kind="reset",
+        )
+
+    @staticmethod
+    def _command_arg(update: Any) -> Optional[str]:
+        """Extract the argument after a slash command (e.g. '/platform tinder')."""
+        text = getattr(getattr(update, "message", None), "text", None)
+        if not isinstance(text, str):
+            return None
+        parts = text.strip().split(maxsplit=1)
+        if len(parts) < 2:
+            return None
+        return parts[1].strip() or None
+
+    # --- session timeout warning (Agent A6 / Stage S-06) --------------------
+    def check_session_timeout(self, user_id: int) -> TimeoutStatus:
+        """Return the T-minus timeout status for a user (injectable clock).
+
+        Uses ``self._clock`` (a no-arg callable) if set so tests are deterministic;
+        otherwise the wall clock. Pure read — does NOT expire the session.
+        """
+        now = self._clock() if callable(self._clock) else None
+        session = self.sessions.get(user_id, expire_if_stale=False)
+        return check_timeout(session, now=now)
+
+    def timeout_warning(self, user_id: int) -> Optional[HandlerResult]:
+        """A warning HandlerResult if the session is inside T-15min, else None.
+
+        Idempotent per window: once warned, we don't nag again until the window is
+        re-entered (TTL reset by activity). The caller surfaces this proactively
+        (e.g. on a scheduler tick) alongside normal replies.
+        """
+        status = self.check_session_timeout(user_id)
+        if not status.should_warn:
+            # Out of the window (or expired): clear any prior warned mark so a new
+            # window can warn again.
+            self._warned.discard(user_id)
+            return None
+        if user_id in self._warned:
+            return None
+        self._warned.add(user_id)
+        return HandlerResult(
+            text=WARNING_MESSAGE.format(minutes=status.minutes_remaining),
+            kind="timeout_warning",
+        )
+
     # --- router -------------------------------------------------------------
     def route(self, update: Any) -> HandlerResult:
         """Dispatch an update to the right handler by type/intent.
@@ -360,8 +733,15 @@ class BotAgent:
                     return self.handle_photo(update)
                 # Command?
                 text = getattr(message, "text", None)
-                if isinstance(text, str) and text.strip().startswith("/start"):
-                    return self.handle_start(update)
+                if isinstance(text, str) and text.strip().startswith("/"):
+                    command = text.strip().split()[0].lstrip("/").lower()
+                    # Strip any @botname suffix Telegram appends in groups.
+                    command = command.split("@", 1)[0]
+                    handler = self._COMMANDS.get(command)
+                    if handler is not None:
+                        return handler(self, update)
+                    # Unknown slash command: fall through to intent parsing below
+                    # (graceful; consistent with A1's robust router).
                 if isinstance(text, str) and text.strip():
                     return self.handle_text(update)
                 # Message with neither photo nor text (sticker, location, etc.)
@@ -377,3 +757,15 @@ class BotAgent:
                 text="Something went wrong handling that — please try again.",
                 kind="error",
             )
+
+    # Slash-command dispatch table (A1 /start + A6 overrides). Defined after the
+    # handler methods so the references resolve.
+    _COMMANDS = {
+        "start": handle_start,
+        "help": handle_help,
+        "next": handle_next,
+        "retry": handle_retry,
+        "shorter": handle_shorter,
+        "platform": handle_platform,
+        "reset": handle_reset,
+    }
