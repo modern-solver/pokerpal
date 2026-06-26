@@ -6,15 +6,21 @@
 python-telegram-bot==21.6
 
 # --- Groq (Llama 4 Scout vision grading + Llama 3.3 70B captions) ---
-groq==0.11.0
+# 1.x is required for the Llama-4-Scout vision image_url payload (verified live);
+# the 0.11.0 SDK predates it and fails the Tier-3 grading call.
+groq==1.5.0
 
 # --- HuggingFace (BLIP-2 scene description: local transformers + serverless fallback) ---
 transformers==4.44.2
 huggingface-hub==0.25.1
 
 # --- Local pre-filter (Tier 1): image processing + perceptual hashing ---
+# headless build: same cv2 API (Laplacian blur, Haar face detection) but NO libGL/
+# GUI system deps, so `import cv2` works on Railway's slim container. opencv-python
+# (non-headless) fails there with "libGL.so.1: cannot open shared object file",
+# which throws inside Tier-1 extraction and surfaces as a grading-stage failure.
 Pillow==10.4.0
-opencv-python==4.10.0.84
+opencv-python-headless==4.10.0.84
 imagehash==4.3.1
 
 # --- HTTP / async ---
