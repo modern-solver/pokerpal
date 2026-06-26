@@ -1,16 +1,157 @@
 # Curator Bot v1.1 — prompts.yml
 # ============================================================================
-# PLACEHOLDER STUB — created by Agent A0 (Stage S-00).
-# OWNER: Agent A4 (Stage S-04) fills in the real prompt templates.
+# OWNER: Agent A4 (Stage S-04). CaptionAgent prompt + policy config.
 #
-# Per PRD Sections 03/06/07, this file holds:
-#   - 6 platform output templates: post_caption (IG/FB), dating_bio (Tinder/Bumble),
-#     prompt_answer (Hinge), linkedin_post (LinkedIn)
-#   - the banned-phrase list for dating bios (e.g. 'love to laugh',
-#     'fluent in sarcasm', 'partner in crime', 'loves adventures',
-#     'looking for my person') — Rule C-09
-#   - the standard Hinge prompt library (10 prompts) — Rule C-10
-#   - the Tier 3 grading prompt + caption prompt architecture
+# Per PRD Sections 03 / 06 / 07 this file holds, as TUNABLE config (no code
+# change to edit copy/limits — mirrors platform_weights.yml):
+#   - the shared caption prompt architecture (SYSTEM = JSON-only; USER carries
+#     platform / tone / scene description {blip_desc} / session vibe / constraints)
+#     — PRD Section 03 "Caption Prompt Architecture";
+#   - 6 platform output templates across the 4 output modes:
+#       post_caption  -> instagram, facebook
+#       dating_bio    -> tinder, bumble
+#       prompt_answer -> hinge
+#       linkedin_post -> linkedin
+#     each with: output_mode, max_length, ordered tone variants, hashtag policy;
+#   - the banned-phrase list for dating bios (Rule C-09);
+#   - the standard 10-prompt Hinge library (Rule C-10);
+#   - the LinkedIn professional-tag / banned-tag policy (Rule C-11).
 #
-# Do NOT add real templates here at S-00 — A4 owns the schema and content.
+# The Tier-3 GRADING prompt is owned by A3 (curator/grading/groq_client.py),
+# NOT here — this file is caption-only.
 # ============================================================================
+
+# --- shared caption prompt architecture (PRD Section 03) --------------------
+# SYSTEM is JSON-only. The USER template is .format(**fields)-rendered by the
+# CaptionAgent with: platform, tone, blip_desc, vibe, constraints, output_mode,
+# max_length, hashtag_instruction, extra (per-mode addendum).
+architecture:
+  system: >-
+    You are a social media caption writer. Output ONLY valid JSON. No preamble.
+    No explanation.
+  user_template: |-
+    Platform: {platform}
+    Output type: {output_mode}
+    Tone requested: {tone}
+    Scene description: {blip_desc}
+    Session vibe: {vibe}
+    Constraints: {constraints}
+    Hard limit: stay under {max_length} characters.
+    {hashtag_instruction}
+    {extra}
+    Generate exactly this JSON and nothing else:
+    {json_shape}
+
+# JSON output shapes per output mode. The CaptionAgent validates the parsed
+# response against the mode's required keys.
+json_shapes:
+  post_caption: '{ "caption": "", "hashtags": ["", ""], "char_count": 0 }'
+  dating_bio: '{ "bio": "", "char_count": 0 }'
+  prompt_answer: '{ "prompt": "", "answer": "", "char_count": 0 }'
+  linkedin_post: '{ "post": "", "hashtags": ["", ""], "char_count": 0 }'
+
+# --- banned phrases for dating bios (Rule C-09) -----------------------------
+# Matched case-insensitively against generated dating-bio text. A hit triggers a
+# regeneration retry; if still present after retries the bio is rejected.
+banned_phrases:
+  - "love to laugh"
+  - "fluent in sarcasm"
+  - "partner in crime"
+  - "loves adventures"
+  - "looking for my person"
+
+# --- Hinge standard prompt library (Rule C-10, PRD Section 06) ---------------
+# The CaptionAgent SELECTS the best-matching library prompt for the photo mood —
+# it never invents prompts. `mood_keywords` steer selection from the BLIP-2 scene
+# description; the first prompt is the neutral default when nothing matches.
+hinge_prompts:
+  - prompt: "Two truths and a lie"
+    mood_keywords: []
+  - prompt: "The way to my heart is..."
+    mood_keywords: ["food", "coffee", "cooking", "dinner", "restaurant", "wine", "meal"]
+  - prompt: "I'm looking for..."
+    mood_keywords: ["portrait", "smiling", "candid"]
+  - prompt: "This year I really want to..."
+    mood_keywords: ["goal", "gym", "running", "training", "studying", "learning"]
+  - prompt: "My most controversial opinion is..."
+    mood_keywords: ["debate", "opinion", "book", "reading"]
+  - prompt: "Don't hate me if I..."
+    mood_keywords: ["funny", "silly", "playful", "costume", "pet", "dog", "cat"]
+  - prompt: "I go crazy for..."
+    mood_keywords: ["music", "concert", "festival", "dancing", "art", "game", "sports"]
+  - prompt: "Best travel story"
+    mood_keywords: ["travel", "beach", "mountain", "hiking", "city", "trip", "abroad", "ocean", "trail", "outdoor"]
+  - prompt: "A life goal of mine..."
+    mood_keywords: ["work", "career", "achievement", "summit", "race", "marathon"]
+  - prompt: "I know the best spot in town for..."
+    mood_keywords: ["bar", "cafe", "rooftop", "local", "view", "sunset", "drinks"]
+
+# --- LinkedIn tag policy (Rule C-11) ----------------------------------------
+linkedin:
+  # Never emit these — they are the opposite of a professional tag.
+  banned_hashtags:
+    - "hustle"
+    - "blessed"
+    - "grind"
+  # Safe professional fallback tags if the model returns too few / banned ones.
+  professional_hashtags:
+    - "leadership"
+    - "innovation"
+    - "growth"
+    - "strategy"
+    - "career"
+
+# --- per-platform output templates ------------------------------------------
+# tones[0] is the default / first /retry-cycle position (Rule C-07).
+# hashtags: null => none; else {min, max}.
+platforms:
+  instagram:
+    output_mode: post_caption
+    max_length: 150
+    tones: ["Witty", "Heartfelt", "Minimal"]
+    hashtags: { min: 5, max: 10 }
+    guidance: "Punchy Instagram caption. Hook in the first few words."
+
+  facebook:
+    output_mode: post_caption
+    max_length: 500
+    tones: ["Warm", "Storytelling", "Minimal"]
+    hashtags: { min: 3, max: 5 }
+    guidance: "Conversational Facebook post; a little more room to tell a story."
+
+  tinder:
+    output_mode: dating_bio
+    max_length: 100
+    tones: ["Playful", "Confident", "Mysterious"]
+    hashtags: null
+    guidance: >-
+      A Tinder opening bio line that hooks. Personality over resume. No cliches,
+      no hashtags, no emoji spam.
+
+  bumble:
+    output_mode: dating_bio
+    max_length: 150
+    tones: ["Approachable", "Adventurous", "Witty"]
+    hashtags: null
+    guidance: >-
+      A Bumble profile headline. Approachable; hint at the activity or lifestyle
+      shown in the photo. No cliches, no hashtags.
+
+  hinge:
+    output_mode: prompt_answer
+    max_length: 150
+    tones: ["Funny", "Heartfelt", "Curiosity-bait"]
+    hashtags: null
+    guidance: >-
+      Answer the GIVEN Hinge prompt only. Do not invent a different prompt. The
+      answer should pair with the photo's mood. No hashtags.
+
+  linkedin:
+    output_mode: linkedin_post
+    max_length: 300
+    tones: ["Professional", "Insight", "Achievement"]
+    hashtags: { min: 3, max: 5 }
+    guidance: >-
+      Standalone LinkedIn post copy that could accompany the photo. Professional
+      tone uses no first-person 'I' and no exclamation marks. Achievement tone may
+      use first-person sparingly. Use only professional hashtags.
