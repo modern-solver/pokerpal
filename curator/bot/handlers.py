@@ -33,10 +33,23 @@ async def _reply(update, result: HandlerResult) -> None:
 
     cq = getattr(update, "callback_query", None)
     if cq is not None:
+        # Always acknowledge the tap so Telegram stops the loading spinner.
         await cq.answer()
-        if result.keyboard_rows is not None and getattr(cq, "message", None):
-            await cq.edit_message_text(result.text, reply_markup=markup)
+        if not result.text:
             return
+        msg = getattr(cq, "message", None)
+        if msg is not None:
+            # Edit the card in place: updates the checkmarks on a platform
+            # toggle (markup present) and replaces the buttons with the
+            # confirmation text on Done (markup is None). A callback update has
+            # no `update.message`, so this is the ONLY path that replies to a
+            # tap — earlier it was gated on keyboard_rows, which silently
+            # dropped the keyboard-less "Done" confirmation.
+            await cq.edit_message_text(result.text, reply_markup=markup)
+        else:
+            # No attached message to edit — fall back to a fresh send.
+            await cq.get_bot().send_message(cq.from_user.id, result.text, reply_markup=markup)
+        return
     if getattr(update, "message", None) is not None and result.text:
         await update.message.reply_text(result.text, reply_markup=markup)
 
