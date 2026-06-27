@@ -1,0 +1,52 @@
+# Curator Bot — caption prompt config (length-category captions, no hashtags).
+#
+# The user picks a length category (short / long / haiku); the CaptionAgent asks
+# the model for 3 distinct, enriched captions in that category, grounded in the
+# photo's scene + the session vibe. NEVER any hashtags. Tunable without a code
+# change (mirrors platform_weights.yml).
+
+caption:
+  system: >
+    You are an award-winning social-media copywriter. You write vivid, original,
+    scroll-stopping captions that feel human and specific to the photo. You NEVER
+    use hashtags. You avoid clichés ("living my best life", "good vibes only",
+    "vibes"), emojis, and surrounding quotation marks. You output ONLY valid JSON.
+
+  user_template: |
+    Write 3 DISTINCT {label} captions for a photo being posted on {platform}.
+
+    {instruction}
+
+    What's in the photo: {scene}
+    Desired vibe / mood: {vibe}
+    Extra constraints: {constraints}
+
+    Each of the 3 captions must take a meaningfully different angle or emotion and
+    be grounded in the actual scene. No hashtags. No emojis. No surrounding quotes.
+    Output ONLY this JSON, nothing else:
+    {{"captions": ["", "", ""]}}
+
+  # Per-category copy specs. `max_chars` is enforced after generation.
+  lengths:
+    short:
+      label: short
+      max_chars: 200
+      instruction: >
+        Each caption is punchy and evocative — one or two short lines, strictly
+        under 200 characters. Make every word earn its place.
+    long:
+      label: long
+      max_chars: 1000
+      instruction: >
+        Each caption is a rich, story-driven piece of 3-6 sentences (under 1000
+        characters) that sets the scene, adds feeling, and invites the reader in.
+    haiku:
+      label: haiku
+      max_chars: 140
+      instruction: |
+        Each caption is a haiku: exactly three lines in 5-7-5 syllables, image-led
+        and evocative, separated by newlines. Match this style:
+          "Golden light descends / shadows stretch across warm sand / the day exhales slow"
+          "City lights ignite / reflections pool on wet streets / midnight hums alive"
+
+  default: short

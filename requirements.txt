@@ -1,0 +1,38 @@
+# Curator Bot v1.1 — dependency manifest (Stage S-00 / Agent A0)
+# Zero-API-cost stack: python-telegram-bot, Groq (free tier), HF transformers (BLIP-2), local CV libs.
+# Versions pinned to reasonable recent releases (as of June 2026).
+
+# --- Telegram bot framework ---
+python-telegram-bot==21.6
+
+# --- Groq (Llama 4 Scout vision grading + Llama 3.3 70B captions) ---
+# 1.x is required for the Llama-4-Scout vision image_url payload (verified live);
+# the 0.11.0 SDK predates it and fails the Tier-3 grading call.
+groq==1.5.0
+
+# --- HuggingFace (BLIP-2 scene description: local transformers + serverless fallback) ---
+transformers==4.44.2
+huggingface-hub==0.25.1
+
+# --- Local pre-filter (Tier 1): image processing + perceptual hashing ---
+# headless build: same cv2 API (Laplacian blur, Haar face detection) but NO libGL/
+# GUI system deps, so `import cv2` works on Railway's slim container. opencv-python
+# (non-headless) fails there with "libGL.so.1: cannot open shared object file",
+# which throws inside Tier-1 extraction and surfaces as a grading-stage failure.
+Pillow==10.4.0
+opencv-python-headless==4.10.0.84
+imagehash==4.3.1
+
+# --- HTTP / async ---
+aiohttp==3.10.5
+
+# --- Config ---
+pyyaml==6.0.2
+
+# --- Testing ---
+pytest==8.3.3
+
+# NOTE: torch is required at runtime by `transformers` for local BLIP-2 inference.
+# It is intentionally NOT pinned here to avoid forcing a heavy CPU/CUDA wheel choice on every
+# environment. Agent A3 (Tier 3 / BLIP-2) owns the torch install decision (CPU vs CUDA wheel).
+# The BLIP-2 smoke test skips gracefully if torch/transformers are unavailable.
