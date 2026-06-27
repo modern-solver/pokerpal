@@ -23,6 +23,7 @@ BOT_COMMANDS: List[Tuple[str, str]] = [
     ("start", "Restart and pick the platforms you're posting to"),
     ("help", "How to use me — the full walkthrough"),
     ("about", "What I can do, and my limits"),
+    ("length", "Pick a caption style: short / long / haiku"),
     ("done", "Finish sending photos — grade & rank them"),
     ("next", "Show the next-ranked photo"),
     ("retry", "Regenerate the current caption (dating apps cycle tone)"),
@@ -50,26 +51,25 @@ USER_GUIDE = (
     "\n"
     "Step by step:\n"
     "  1. /start, then tap to pick one or more platforms (multi-select), then Done.\n"
-    "  2. (Optional) Tell me the vibe or any constraints in plain text — e.g. "
-    "\"adventurous, no location names, under 100 chars\".\n"
-    "  3. Send your photos (a batch is best — I compare them and rank the strongest).\n"
-    "  4. Say \"done\" when finished. I grade, rank, and show cards: each is a photo "
-    "+ why it scored + 3 caption options.\n"
-    "  5. Reply with the card number to pick a photo, then the option number to pick "
-    "a caption. I return the post-ready result.\n"
+    "  2. Pick a caption style: Short (<200), Long (<1000), or Haiku.\n"
+    "  3. (Optional) Tell me the vibe or any constraints in plain text — e.g. "
+    "\"adventurous, no location names\".\n"
+    "  4. Send your photos (a batch is best — I compare them and rank the strongest).\n"
+    "  5. Say \"done\" (or /done). I grade, rank, and send your best photos, each with "
+    "3 caption options as buttons.\n"
+    "  6. Tap a caption button under a photo (or reply with a number) — I return the "
+    "post-ready caption.\n"
     "\n"
     "While reviewing, use:\n"
+    "  /length — change the caption style (short / long / haiku)\n"
     "  /next — see the next-ranked photo\n"
-    "  /retry — regenerate the caption (dating apps cycle the tone in order)\n"
+    "  /retry — cycle to a different caption option\n"
     "  /shorter — make the current caption tighter\n"
     "  /platform <name> — switch platform (e.g. /platform tinder) and re-rank\n"
     "  /reset — clear everything and start over\n"
     "\n"
-    "Tip: output changes by platform — Instagram/Facebook get a post caption with "
-    "hashtags, Tinder/Bumble get a bio line, Hinge gets a prompt + answer, and "
-    "LinkedIn gets professional post copy.\n"
-    "\n"
-    "Ask me anything about how I work, or send /about for capabilities and limits."
+    "Captions are always clean — no hashtags. Ask me anything about how I work, or "
+    "send /about for capabilities and limits."
 )
 
 # --- about / capabilities + limits (/about) ---------------------------------
@@ -81,8 +81,8 @@ ABOUT_TEXT = (
     "  • Score each photo in 3 tiers: a local quality pre-filter (sharpness, "
     "resolution, faces, duplicates), platform-fit rules, then an AI vision read "
     "(composition, lighting, subject, mood).\n"
-    "  • Rank your batch and write 3 caption options in the right format for each "
-    "platform.\n"
+    "  • Rank your batch and write 3 caption options in your chosen style "
+    "(short / long / haiku) — never any hashtags.\n"
     "\n"
     "My limits:\n"
     "  • Photos only — I don't handle video.\n"
@@ -105,9 +105,9 @@ _FAQ: List[Tuple[Tuple[str, ...], str]] = [
     (
         ("platform", "instagram", "tinder", "bumble", "hinge", "linkedin",
          "facebook", "which app", "what app"),
-        f"I support {PLATFORMS_LINE}. Each gets the right output: Instagram/Facebook "
-        "a post caption with hashtags, Tinder/Bumble a bio line, Hinge a prompt + "
-        "answer, and LinkedIn professional post copy.",
+        f"I support {PLATFORMS_LINE}. I rank your photos per platform and write "
+        "captions in the style you pick — short, long, or haiku — always without "
+        "hashtags.",
     ),
     (
         ("grade", "grading", "score", "scoring", "rank", "ranking", "rate",
@@ -118,11 +118,10 @@ _FAQ: List[Tuple[Tuple[str, ...], str]] = [
         "a per-platform score, then rank your batch.",
     ),
     (
-        ("caption", "bio", "hashtag", "prompt", "write", "text"),
-        "I write 3 options per photo in the format that fits the platform: a post "
-        "caption + hashtags (Instagram/Facebook), a short bio line (Tinder/Bumble), "
-        "a Hinge prompt + answer, or professional post copy (LinkedIn). Use /retry "
-        "for a different take or /shorter to tighten it.",
+        ("caption", "bio", "hashtag", "length", "short", "long", "haiku", "write", "text"),
+        "I write 3 caption options per photo in the style you choose: Short "
+        "(<200 chars), Long (<1000), or Haiku. No hashtags, ever. Use /length to "
+        "change the style, /retry for a different option, or /shorter to tighten it.",
     ),
     (
         ("cost", "free", "price", "pricing", "pay", "subscription", "money"),

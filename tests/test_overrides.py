@@ -45,7 +45,7 @@ def make_variant(tone, mode, text):
     elif mode == "post_caption":
         payload["caption"] = text
         payload["hashtags"] = []
-    v = CaptionVariant(tone=tone, output_mode=mode, text=text,
+    v = CaptionVariant(label=tone, length_mode=mode, text=text,
                        char_count=len(text), payload=payload)
     return v
 
@@ -118,23 +118,18 @@ def test_retry_cycles_dating_tones_in_order():
     assert seen == ["Confident", "Mysterious", "Playful", "Confident"]
 
 
-def test_retry_uses_configured_tone_order_not_random():
-    """The cycle order must equal A4's configured Tinder tone order exactly."""
-    from curator.caption.prompts import get_prompts, tones_for
-
-    expected = tones_for(get_prompts(), "tinder")
-    assert expected == ["Playful", "Confident", "Mysterious"]
+def test_retry_cycles_options_in_order_not_random():
+    """The cycle must step through the caption options IN ORDER (not random)."""
     bot = BotAgent()
     uid = 21
-    card = make_card(1, 0, "tinder", expected, mode="dating_bio")
+    labels = ["Option 1", "Option 2", "Option 3"]
+    card = make_card(1, 0, "instagram", labels, mode="short")
     present(bot, uid, [card])
-    # Walk a full cycle and assert it matches the configured order (offset by 1
-    # because the default/Playful is already on screen before the first /retry).
     walked = []
-    for _ in range(len(expected)):
+    for _ in range(len(labels)):
         r = bot.handle_retry(cmd(uid, "/retry"))
         walked.append(r.text.split("]")[0].lstrip("["))
-    rotated = expected[1:] + expected[:1]
+    rotated = labels[1:] + labels[:1]  # default (1) already shown -> starts at 2
     assert walked == rotated
 
 
@@ -169,9 +164,9 @@ def test_shorter_regenerates_via_caption_agent():
     from curator.caption.agent import CaptionAgent
 
     class ShortGen:
-        # A stub Groq text client that returns a short caption JSON.
+        # A stub Groq text client that returns short captions JSON.
         def generate(self, system, user):
-            return '{"caption": "brief", "hashtags": []}'
+            return '{"captions": ["brief", "brief two", "brief three"]}'
 
     bot = BotAgent(caption_agent=CaptionAgent(generator=ShortGen()))
     uid = 31

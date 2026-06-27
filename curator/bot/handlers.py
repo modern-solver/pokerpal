@@ -34,21 +34,26 @@ def _chat_id(update):
     return getattr(user, "id", None)
 
 
-async def _reply(update, result: HandlerResult) -> None:
-    """Send a HandlerResult back over Telegram (text + optional keyboard)."""
-    markup = None
-    if result.keyboard_rows is not None:
-        # Rebuild a PTB keyboard from the same selection the agent computed.
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+def _markup(keyboard_rows):
+    """Build a PTB InlineKeyboardMarkup from plain rows, or None."""
+    if not keyboard_rows:
+        return None
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-        rows = [
+    return InlineKeyboardMarkup(
+        [
             [
                 InlineKeyboardButton(b["text"], callback_data=b["callback_data"])
                 for b in row
             ]
-            for row in result.keyboard_rows
+            for row in keyboard_rows
         ]
-        markup = InlineKeyboardMarkup(rows)
+    )
+
+
+async def _reply(update, result: HandlerResult) -> None:
+    """Send a HandlerResult back over Telegram (text + optional keyboard)."""
+    markup = _markup(result.keyboard_rows)
 
     cq = getattr(update, "callback_query", None)
     if cq is not None:
@@ -114,14 +119,17 @@ async def _deliver_cards(agent: BotAgent, update, context) -> None:
     await context.bot.send_message(
         chat_id, f"Done! Here are your top {len(views)} for {target}:"
     )
-    for file_id, caption in views:
+    for file_id, caption, keyboard_rows in views:
         cap = caption[:1024]  # Telegram photo-caption limit
+        markup = _markup(keyboard_rows)
         try:
-            await context.bot.send_photo(chat_id, file_id, caption=cap)
+            await context.bot.send_photo(
+                chat_id, file_id, caption=cap, reply_markup=markup
+            )
         except Exception:  # noqa: BLE001 - photo unavailable -> send the text
-            await context.bot.send_message(chat_id, cap)
+            await context.bot.send_message(chat_id, cap, reply_markup=markup)
     await context.bot.send_message(
-        chat_id, "Reply with a photo number to pick one (e.g. 1)."
+        chat_id, "Tap a caption button above, or reply with a photo number."
     )
 
 
@@ -157,7 +165,16 @@ def register_handlers(application, agent: Optional[BotAgent] = None) -> BotAgent
         await _reply(update, agent.handle_start(update))
 
     async def on_callback(update, context):  # noqa: ANN001
-        await _reply(update, agent.handle_platform_callback(update))
+        result = agent.handle_callback(update)
+        # A caption pick comes from a PHOTO message (no editable text), so the
+        # post-ready card must be a fresh send rather than an edit.
+        if result.kind == "final_card":
+            cq = getattr(update, "callback_query", None)
+            if cq is not None:
+                await cq.answer()
+            await context.bot.send_message(_chat_id(update), result.text)
+        else:
+            await _reply(update, result)
 
     async def on_photo(update, context):  # noqa: ANN001
         await _reply(update, agent.handle_photo(update))
@@ -180,6 +197,9 @@ def register_handlers(application, agent: Optional[BotAgent] = None) -> BotAgent
     async def on_about(update, context):  # noqa: ANN001
         await _reply(update, agent.handle_about(update))
 
+    async def on_length(update, context):  # noqa: ANN001
+        await _reply(update, agent.handle_length(update))
+
     async def on_next(update, context):  # noqa: ANN001
         await _reply(update, agent.handle_next(update))
 
@@ -199,6 +219,7 @@ def register_handlers(application, agent: Optional[BotAgent] = None) -> BotAgent
     application.add_handler(CommandHandler("help", on_help))
     application.add_handler(CommandHandler("commands", on_help))
     application.add_handler(CommandHandler("about", on_about))
+    application.add_handler(CommandHandler("length", on_length))
     application.add_handler(CommandHandler("done", on_done))
     application.add_handler(CommandHandler("next", on_next))
     application.add_handler(CommandHandler("retry", on_retry))

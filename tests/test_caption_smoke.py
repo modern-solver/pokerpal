@@ -19,7 +19,7 @@ from curator.caption.groq_text import GroqTextGenerator
     not os.environ.get("GROQ_API_KEY"),
     reason="GROQ_API_KEY not set — skipping live Groq caption smoke (sandbox has no key)",
 )
-def test_groq_caption_generates_post_caption():
+def test_groq_caption_generates_short_captions():
     pytest.importorskip("groq", reason="groq package not installed")
 
     gen = GroqTextGenerator(api_key=os.environ["GROQ_API_KEY"])
@@ -28,11 +28,12 @@ def test_groq_caption_generates_post_caption():
         "instagram",
         "a person hiking on a mountain trail at golden hour",
         vibe="adventurous summer energy",
+        length_mode="short",
     )
-    assert result.output_mode == "post_caption"
+    assert result.length_mode == "short"
     assert len(result.variants) == 3
     for v in result.variants:
-        assert v.char_count <= 150
-        assert set(v.payload) == {"caption", "hashtags", "char_count"}
-        # payload round-trips as JSON (it is what A5 will render)
+        assert v.char_count <= 200
+        assert "#" not in v.text  # no hashtags
+        assert set(v.payload) == {"caption", "char_count"}
         json.dumps(v.payload)

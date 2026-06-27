@@ -1,15 +1,8 @@
-"""prompts.yml loader + accessors for the CaptionAgent (Agent A4 / Stage S-04).
+"""prompts.yml loader + accessors for the CaptionAgent.
 
-Loads and lightly validates the caption prompt/policy config so copy, length
-caps, tone variants, the banned-phrase list, the Hinge prompt library, and the
-LinkedIn tag policy all tune from YAML WITHOUT a code change (mirrors A2's
-weights.py). Pure local I/O — no network, no model call, no groq import.
-
-Output modes (PRD rule C-08):
-    post_caption  -> instagram, facebook
-    dating_bio    -> tinder, bumble
-    prompt_answer -> hinge
-    linkedin_post -> linkedin
+Loads and lightly validates the caption prompt config so the system/user prompt
+and the per-length specs (short / long / haiku) tune from YAML WITHOUT a code
+change. Pure local I/O — no network, no model call, no groq import.
 """
 
 from __future__ import annotations
@@ -20,81 +13,36 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from ..session.schema import PLATFORMS
-
-# Default config path: curator/config/prompts.yml relative to this file.
 DEFAULT_PROMPTS_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "config", "prompts.yml")
 )
 
-# The 4 output modes and which platforms map to each (PRD Section 03 table).
-OUTPUT_MODES = ("post_caption", "dating_bio", "prompt_answer", "linkedin_post")
-
-# Canonical output_mode per platform (rule C-08). The loader cross-checks the
-# YAML against this so a config typo surfaces loudly.
-PLATFORM_OUTPUT_MODE: Dict[str, str] = {
-    "instagram": "post_caption",
-    "facebook": "post_caption",
-    "tinder": "dating_bio",
-    "bumble": "dating_bio",
-    "hinge": "prompt_answer",
-    "linkedin": "linkedin_post",
-}
-
-DATING_PLATFORMS = ("tinder", "bumble")
-
-
-def output_mode_for(platform: str) -> str:
-    """Switch output mode based on platform (rule C-08)."""
-    try:
-        return PLATFORM_OUTPUT_MODE[platform]
-    except KeyError as exc:
-        raise ValueError(f"unknown platform: {platform!r}") from exc
+# The caption length categories the user can pick.
+LENGTH_MODES = ("short", "long", "haiku")
+LENGTH_LABELS = {"short": "Short", "long": "Long", "haiku": "Haiku"}
+DEFAULT_LENGTH = "short"
 
 
 def load_prompts(path: Optional[str] = None) -> Dict[str, Any]:
-    """Load and validate prompts.yml.
-
-    Raises ValueError on a malformed config (missing platform, wrong/absent
-    output_mode, empty tone list, missing shared blocks) so typos fail loud.
-    """
+    """Load and validate prompts.yml. Raises ValueError on a malformed config."""
     path = path or DEFAULT_PROMPTS_PATH
     with open(path, "r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
 
-    for key in ("architecture", "json_shapes", "banned_phrases", "hinge_prompts",
-                "platforms", "linkedin"):
-        if key not in data:
-            raise ValueError(f"prompts.yml missing top-level block: {key!r}")
-
-    arch = data["architecture"]
-    if not arch.get("system") or not arch.get("user_template"):
-        raise ValueError("prompts.yml architecture needs 'system' and 'user_template'")
-
-    shapes = data["json_shapes"]
-    for mode in OUTPUT_MODES:
-        if mode not in shapes:
-            raise ValueError(f"prompts.yml json_shapes missing mode: {mode!r}")
-
-    platforms = data["platforms"]
-    for platform in PLATFORMS:
-        if platform not in platforms:
-            raise ValueError(f"prompts.yml missing platform: {platform!r}")
-        profile = platforms[platform]
-        mode = profile.get("output_mode")
-        expected = PLATFORM_OUTPUT_MODE[platform]
-        if mode != expected:
-            raise ValueError(
-                f"platform {platform!r} output_mode is {mode!r}, expected {expected!r}"
-            )
-        if not profile.get("tones"):
-            raise ValueError(f"platform {platform!r} has no tone variants")
-        if not profile.get("max_length"):
-            raise ValueError(f"platform {platform!r} missing max_length")
-
-    if not data["hinge_prompts"]:
-        raise ValueError("prompts.yml hinge_prompts is empty")
-
+    cap = data.get("caption")
+    if not isinstance(cap, dict):
+        raise ValueError("prompts.yml missing top-level 'caption' block")
+    if not cap.get("system") or not cap.get("user_template"):
+        raise ValueError("caption block needs 'system' and 'user_template'")
+    lengths = cap.get("lengths")
+    if not isinstance(lengths, dict):
+        raise ValueError("caption block missing 'lengths'")
+    for mode in LENGTH_MODES:
+        spec = lengths.get(mode)
+        if not isinstance(spec, dict):
+            raise ValueError(f"caption.lengths missing mode: {mode!r}")
+        if not spec.get("instruction") or not spec.get("max_chars"):
+            raise ValueError(f"caption.lengths.{mode} needs 'instruction' + 'max_chars'")
     return data
 
 
@@ -104,35 +52,36 @@ def get_prompts(path: Optional[str] = None) -> Dict[str, Any]:
     return load_prompts(path)
 
 
-# --- small typed accessors --------------------------------------------------
-def platform_config(prompts: Dict[str, Any], platform: str) -> Dict[str, Any]:
-    try:
-        return prompts["platforms"][platform]
-    except KeyError as exc:
-        raise ValueError(f"unknown platform: {platform!r}") from exc
+def normalize_length(mode: Optional[str]) -> str:
+    """Coerce any input to a valid length mode (default 'short')."""
+    m = (mode or "").strip().lower()
+    return m if m in LENGTH_MODES else DEFAULT_LENGTH
 
 
-def tones_for(prompts: Dict[str, Any], platform: str) -> List[str]:
-    """Ordered tone variants for a platform (order = /retry cycle, rule C-07)."""
-    return list(platform_config(prompts, platform)["tones"])
+def length_spec(prompts: Dict[str, Any], mode: Optional[str]) -> Dict[str, Any]:
+    """Resolved spec for a length mode: {mode, label, max_chars, instruction}."""
+    mode = normalize_length(mode)
+    raw = prompts["caption"]["lengths"][mode]
+    return {
+        "mode": mode,
+        "label": LENGTH_LABELS[mode],
+        "max_chars": int(raw["max_chars"]),
+        "instruction": str(raw["instruction"]).strip(),
+    }
 
 
-def max_length_for(prompts: Dict[str, Any], platform: str) -> int:
-    return int(platform_config(prompts, platform)["max_length"])
+def caption_prompts(prompts: Dict[str, Any]) -> Dict[str, str]:
+    """The system + user_template strings."""
+    cap = prompts["caption"]
+    return {
+        "system": str(cap["system"]).strip(),
+        "user_template": str(cap["user_template"]),
+    }
 
 
-def hashtag_policy_for(prompts: Dict[str, Any], platform: str) -> Optional[Dict[str, int]]:
-    """{'min': m, 'max': n} or None when hashtags do not apply."""
-    return platform_config(prompts, platform).get("hashtags")
+def max_chars_for(prompts: Dict[str, Any], mode: Optional[str]) -> int:
+    return length_spec(prompts, mode)["max_chars"]
 
 
-def banned_phrases(prompts: Dict[str, Any]) -> List[str]:
-    return [str(p).lower() for p in prompts.get("banned_phrases", [])]
-
-
-def hinge_prompt_library(prompts: Dict[str, Any]) -> List[Dict[str, Any]]:
-    return list(prompts.get("hinge_prompts", []))
-
-
-def linkedin_policy(prompts: Dict[str, Any]) -> Dict[str, Any]:
-    return dict(prompts.get("linkedin", {}))
+def length_modes() -> List[str]:
+    return list(LENGTH_MODES)

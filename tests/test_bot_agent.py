@@ -84,6 +84,11 @@ def test_platform_multiselect_toggle_and_done():
 
     done = agent.route(make_callback_update(1, PLATFORMS_DONE_CALLBACK))
     assert done.kind == "platforms_done"
+    # Done now shows the caption-length selector; a length pick advances the stage.
+    assert done.keyboard_rows  # length buttons shown
+    length = agent.route(make_callback_update(1, "length:haiku"))
+    assert length.kind == "length_set"
+    assert agent.sessions.get(1).length_mode == "haiku"
     assert agent.sessions.get(1).stage == Stage.AWAITING_INTENT
 
 

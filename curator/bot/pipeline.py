@@ -31,6 +31,7 @@ def run_pipeline(
     describe: Optional[Callable[[bytes], str]] = None,
     vibe: Optional[str] = None,
     constraints: Optional[Sequence[str]] = None,
+    length_mode: Optional[str] = None,
     top_n: int = 3,
 ) -> Tuple[List[OutputCard], List[Any], List[Any]]:
     """Grade, caption, and rank a batch of photos for ``target``.
@@ -66,7 +67,12 @@ def run_pipeline(
             scene = (getattr(res, "scene_description", "") or "") if res else ""
         captions.append(
             caption_agent.generate(
-                target, scene, vibe=vibe, constraints=constraints, photo_index=idx
+                target,
+                scene,
+                vibe=vibe,
+                constraints=constraints,
+                photo_index=idx,
+                length_mode=length_mode,
             )
         )
 

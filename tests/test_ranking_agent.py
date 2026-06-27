@@ -34,17 +34,17 @@ def make_result(index, file_id, composite, *, tier3=None, flags=None,
 
 def make_caption(platform, photo_index, mode="post_caption"):
     variants = [
-        CaptionVariant(tone="Witty", output_mode=mode, text=f"witty {photo_index}",
+        CaptionVariant(label="Witty", length_mode=mode, text=f"witty {photo_index}",
                        char_count=10, payload={"caption": f"witty {photo_index}",
                                                "hashtags": ["#a"], "char_count": 10}),
-        CaptionVariant(tone="Heartfelt", output_mode=mode, text=f"heart {photo_index}",
+        CaptionVariant(label="Heartfelt", length_mode=mode, text=f"heart {photo_index}",
                        char_count=10, payload={"caption": f"heart {photo_index}",
                                                "hashtags": [], "char_count": 10}),
-        CaptionVariant(tone="Minimal", output_mode=mode, text=f"min {photo_index}",
+        CaptionVariant(label="Minimal", length_mode=mode, text=f"min {photo_index}",
                        char_count=8, payload={"caption": f"min {photo_index}",
                                               "hashtags": [], "char_count": 8}),
     ]
-    return CaptionResult(platform=platform, output_mode=mode, max_length=150,
+    return CaptionResult(platform=platform, length_mode=mode, max_length=150,
                          variants=variants, photo_index=photo_index)
 
 

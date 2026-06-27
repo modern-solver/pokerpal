@@ -20,7 +20,7 @@ from curator.ranking.selection import (
 
 
 def variant(tone, mode, payload):
-    return CaptionVariant(tone=tone, output_mode=mode,
+    return CaptionVariant(label=tone, length_mode=mode,
                           text=str(payload.get("caption") or payload.get("bio")
                                    or payload.get("answer") or payload.get("post")),
                           char_count=10, payload=payload)
@@ -126,30 +126,20 @@ def test_select_propagates_variant_error():
     assert err.reason == "unparseable"
 
 
-# === render_variant per output mode =========================================
-def test_render_post_caption_with_hashtags():
-    v = variant("w", "post_caption", {"caption": "sunset vibes",
-                                      "hashtags": ["#sun", "#sea"], "char_count": 12})
-    assert render_variant(v) == "sunset vibes\n#sun #sea"
+# === render_variant: plain caption text, NO hashtags =======================
+def test_render_caption_is_plain_text():
+    v = variant("w", "short", {"caption": "sunset vibes", "char_count": 12})
+    assert render_variant(v) == "sunset vibes"
 
 
-def test_render_dating_bio():
-    v = variant("b", "dating_bio", {"bio": "ramen enthusiast", "char_count": 15})
-    assert render_variant(v) == "ramen enthusiast"
+def test_render_strips_no_hashtags_present():
+    v = variant("w", "long", {"caption": "a quiet evening by the river", "char_count": 28})
+    assert "#" not in render_variant(v)
 
 
-def test_render_prompt_answer():
-    v = variant("p", "prompt_answer", {"prompt": "The way to my heart is...",
-                                       "answer": "good lighting", "char_count": 13})
-    rendered = render_variant(v)
-    assert "The way to my heart is..." in rendered
-    assert "good lighting" in rendered
-
-
-def test_render_linkedin_post():
-    v = variant("pro", "linkedin_post", {"post": "Reflecting on Q2",
-                                         "hashtags": ["#growth"], "char_count": 16})
-    assert render_variant(v) == "Reflecting on Q2\n#growth"
+def test_render_haiku_keeps_lines():
+    v = variant("h", "haiku", {"caption": "line one\nline two longer\nline three", "char_count": 30})
+    assert render_variant(v).count("\n") == 2
 
 
 # === A6 hook: cycle_variant =================================================

@@ -104,6 +104,8 @@ class Session:
     vibe: Optional[str] = None
     constraints: List[str] = field(default_factory=list)
     photos: List[PhotoRef] = field(default_factory=list)
+    # Caption length category the user picked: "short" | "long" | "haiku".
+    length_mode: str = "short"
     stage: Stage = Stage.NEW
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
@@ -128,6 +130,7 @@ class Session:
             "vibe": self.vibe,
             "constraints": list(self.constraints),
             "photos": [p.to_dict() for p in self.photos],
+            "length_mode": self.length_mode,
             "stage": self.stage.value,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
@@ -142,6 +145,7 @@ class Session:
             vibe=d.get("vibe"),
             constraints=list(d.get("constraints", [])),
             photos=[PhotoRef.from_dict(p) for p in d.get("photos", [])],
+            length_mode=d.get("length_mode", "short"),
             stage=Stage(d.get("stage", Stage.NEW.value)),
             created_at=d.get("created_at", time.time()),
             updated_at=d.get("updated_at", time.time()),

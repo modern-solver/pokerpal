@@ -21,38 +21,9 @@ from ..caption.result import CaptionVariant
 
 
 def render_variant(variant: CaptionVariant) -> str:
-    """Render one caption variant from its mode-shaped payload (rule C-08).
-
-    The payload is the canonical dict A4 produced; we never re-derive copy here,
-    only present it. Returns the display string a user reads for that variant.
-    """
+    """Render one caption option for display: plain caption text, no hashtags."""
     payload = variant.payload or {}
-    mode = variant.output_mode
-
-    if mode == "post_caption":
-        caption = str(payload.get("caption", variant.text) or "")
-        tags = payload.get("hashtags") or variant.hashtags
-        tag_str = " ".join(tags)
-        return f"{caption}\n{tag_str}".strip() if tag_str else caption.strip()
-
-    if mode == "dating_bio":
-        return str(payload.get("bio", variant.text) or "").strip()
-
-    if mode == "prompt_answer":
-        prompt = str(payload.get("prompt", variant.prompt or "") or "").strip()
-        answer = str(payload.get("answer", variant.text) or "").strip()
-        if prompt:
-            return f"{prompt}\n{answer}".strip()
-        return answer
-
-    if mode == "linkedin_post":
-        post = str(payload.get("post", variant.text) or "")
-        tags = payload.get("hashtags") or variant.hashtags
-        tag_str = " ".join(tags)
-        return f"{post}\n{tag_str}".strip() if tag_str else post.strip()
-
-    # Unknown mode: degrade to the primary text rather than crash.
-    return str(variant.text or "").strip()
+    return str(payload.get("caption", variant.text) or "").strip()
 
 
 @dataclass
@@ -144,19 +115,18 @@ class FinalCard:
         file_id:     the chosen photo (by Telegram file id).
         photo_index: chosen photo's batch index.
         variant_index: 1-based number of the chosen variant.
-        tone:        the chosen variant's tone name.
-        output_mode: the platform output mode (rule C-08).
+        label:       the chosen option's label ("Option 2").
+        length_mode: the caption length category ("short" | "long" | "haiku").
         rendered:    the post-ready display text for the chosen variant.
-        payload:     the chosen variant's mode-shaped payload (for the caller to
-                     post verbatim).
+        payload:     the chosen variant's payload (for the caller to post verbatim).
         score / rationale: carried from the ranked pick for confirmation display.
     """
 
     platform: str
     photo_index: int
     variant_index: int
-    tone: str
-    output_mode: str
+    label: str
+    length_mode: str
     rendered: str
     payload: Dict[str, Any] = field(default_factory=dict)
     file_id: Optional[str] = None
@@ -168,8 +138,8 @@ class FinalCard:
             "platform": self.platform,
             "photo_index": self.photo_index,
             "variant_index": self.variant_index,
-            "tone": self.tone,
-            "output_mode": self.output_mode,
+            "label": self.label,
+            "length_mode": self.length_mode,
             "rendered": self.rendered,
             "payload": dict(self.payload),
             "file_id": self.file_id,

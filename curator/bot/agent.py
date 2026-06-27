@@ -48,10 +48,15 @@ from curator.ranking.selection import (
     select_variant,
 )
 from .keyboards import (
+    CAPTION_CALLBACK_PREFIX,
+    LENGTH_CALLBACK_PREFIX,
     PLATFORM_CALLBACK_PREFIX,
     PLATFORMS_DONE_CALLBACK,
+    caption_button_rows,
+    length_button_rows,
     platform_button_rows,
 )
+from curator.caption.prompts import LENGTH_LABELS, normalize_length
 from .faq import (
     ABOUT_TEXT,
     USER_GUIDE,
@@ -191,6 +196,18 @@ class BotAgent:
         """/about — capabilities and limitations."""
         return HandlerResult(text=ABOUT_TEXT, kind="about")
 
+    def handle_length(self, update: Any) -> HandlerResult:
+        """/length — (re)choose the caption style (short / long / haiku)."""
+        user_id = self._user_id(update)
+        if user_id is None:
+            return HandlerResult(text="Send /start to begin.", kind="no_user")
+        session = self.sessions.get_or_init(user_id)
+        return HandlerResult(
+            text="Pick a caption style:",
+            kind="length_prompt",
+            keyboard_rows=length_button_rows(session.length_mode),
+        )
+
     def handle_done(self, update: Any) -> HandlerResult:
         """/done — finish collecting photos and start grading.
 
@@ -266,6 +283,7 @@ class BotAgent:
                 describe=self._describe_fn(),
                 vibe=session.vibe,
                 constraints=list(session.constraints),
+                length_mode=session.length_mode,
                 top_n=3,
             )
         except Exception:  # noqa: BLE001 - never crash the conversation
@@ -304,16 +322,14 @@ class BotAgent:
                     kind="platforms_done_empty",
                     keyboard_rows=platform_button_rows(session.platforms),
                 )
-            self.sessions.update(user_id, stage=Stage.AWAITING_INTENT)
             chosen = ", ".join(PLATFORM_LABELS[p] for p in session.platforms)
             return HandlerResult(
                 text=(
                     f"Great — targeting: {chosen}.\n\n"
-                    "Tell me the vibe (mood/theme) and any constraints "
-                    "(e.g. 'no location names', 'under 100 chars'), "
-                    "or just start sending photos."
+                    "Now pick a caption style:"
                 ),
                 kind="platforms_done",
+                keyboard_rows=length_button_rows(session.length_mode),
             )
 
         if data.startswith(PLATFORM_CALLBACK_PREFIX):
@@ -328,6 +344,51 @@ class BotAgent:
             )
 
         return HandlerResult(text="Unrecognized action.", kind="ignored")
+
+    def handle_callback(self, update: Any) -> HandlerResult:
+        """Dispatch any inline-button tap by its callback-data prefix."""
+        data = getattr(getattr(update, "callback_query", None), "data", None)
+        if isinstance(data, str):
+            if data.startswith(LENGTH_CALLBACK_PREFIX):
+                return self.handle_length_callback(update)
+            if data.startswith(CAPTION_CALLBACK_PREFIX):
+                return self.handle_caption_callback(update)
+        # platform toggles + Done (and unknown) -> platform handler.
+        return self.handle_platform_callback(update)
+
+    def handle_length_callback(self, update: Any) -> HandlerResult:
+        """Set the caption length category from a 'length:<mode>' tap."""
+        user_id = self._user_id(update)
+        data = getattr(getattr(update, "callback_query", None), "data", None)
+        if user_id is None or not isinstance(data, str):
+            return HandlerResult(text="Sorry, I couldn't read that.", kind="ignored")
+        mode = normalize_length(data[len(LENGTH_CALLBACK_PREFIX):])
+        self.sessions.get_or_init(user_id)
+        self.sessions.update(user_id, length_mode=mode, stage=Stage.AWAITING_INTENT)
+        return HandlerResult(
+            text=(
+                f"{LENGTH_LABELS[mode]} captions it is.\n\n"
+                "Optionally tell me the vibe (e.g. 'moody, adventurous') or any "
+                "constraints, then send your photos and say 'done' (or /done)."
+            ),
+            kind="length_set",
+        )
+
+    def handle_caption_callback(self, update: Any) -> HandlerResult:
+        """Pick a caption from a 'cap:<card>:<opt>' tap -> post-ready final card."""
+        user_id = self._user_id(update)
+        data = getattr(getattr(update, "callback_query", None), "data", None)
+        if user_id is None or not isinstance(data, str):
+            return HandlerResult(text="Sorry, I couldn't read that.", kind="ignored")
+        try:
+            _, card_s, opt_s = data.split(":", 2)
+            card_no, opt_no = int(card_s), int(opt_s)
+        except (ValueError, IndexError):
+            return HandlerResult(text="That selection wasn't valid.", kind="select_invalid")
+        photo = self.handle_photo_selection(user_id, card_no)
+        if photo.kind != "select_photo_ok":
+            return photo  # graceful error already shaped
+        return self.handle_variant_selection(user_id, opt_no)
 
     def handle_text(self, update: Any) -> HandlerResult:
         """Parse a free-text message into intent and merge into the session."""
@@ -512,10 +573,19 @@ class BotAgent:
         )
 
     def pending_card_views(self, user_id: int) -> List[tuple]:
-        """(file_id, caption) per ranked card, for sending photos in the chat."""
+        """(file_id, caption, keyboard_rows) per ranked card.
+
+        keyboard_rows are the 'Use 1/2/3' caption-pick buttons so the user taps a
+        caption directly under each photo (callback 'cap:<card>:<opt>').
+        """
         cards = self._pending_cards.get(user_id) or []
         return [
-            (getattr(c.photo, "file_id", None), format_card(c)) for c in cards
+            (
+                getattr(c.photo, "file_id", None),
+                format_card(c),
+                caption_button_rows(c.card_index, len(c.photo.variants)),
+            )
+            for c in cards
         ]
 
     def active_platform_label(self, user_id: int) -> str:
@@ -720,7 +790,7 @@ class BotAgent:
 
         return HandlerResult(
             text=(
-                f"[{variant.tone}] {render_variant(variant)}"
+                f"[{variant.label}] {render_variant(variant)}"
             ),
             kind="retry_cycled",
         )
@@ -760,7 +830,7 @@ class BotAgent:
                 photo.breakdown.get("scene_description", "") if photo.breakdown else "",
                 session=session,
                 photo_index=photo.photo_index,
-                tones=[current.tone],
+                length_mode=current.length_mode,
             )
         except Exception:  # noqa: BLE001 - never crash the command
             return HandlerResult(
@@ -782,7 +852,7 @@ class BotAgent:
         return HandlerResult(
             text=(
                 f"Shorter ({new_variant.char_count}/{tighter_cap} chars):\n"
-                f"[{new_variant.tone}] {render_variant(new_variant)}"
+                f"[{new_variant.label}] {render_variant(new_variant)}"
             ),
             kind="shorter_ok",
         )
@@ -795,8 +865,8 @@ class BotAgent:
 
     @staticmethod
     def _clamp_variant(variant: Any, cap: int) -> Any:
-        """Clamp a CaptionVariant's primary text + payload to ``cap`` chars."""
-        from curator.caption.agent import _PRIMARY_KEY, _trim_to
+        """Clamp a CaptionVariant's text + payload to ``cap`` chars."""
+        from curator.caption.agent import _trim_to
 
         text = variant.text or ""
         if len(text) > cap:
@@ -804,9 +874,8 @@ class BotAgent:
         variant.text = text
         variant.char_count = len(text)
         variant.trimmed = True
-        key = _PRIMARY_KEY.get(variant.output_mode)
-        if key and isinstance(variant.payload, dict):
-            variant.payload[key] = text
+        if isinstance(variant.payload, dict):
+            variant.payload["caption"] = text
             variant.payload["char_count"] = len(text)
         return variant
 
@@ -934,7 +1003,7 @@ class BotAgent:
             # Callback query (platform selector taps) take priority.
             cq = getattr(update, "callback_query", None)
             if cq is not None and getattr(cq, "data", None) is not None:
-                return self.handle_platform_callback(update)
+                return self.handle_callback(update)
 
             message = getattr(update, "message", None)
             if message is not None:
@@ -975,6 +1044,7 @@ class BotAgent:
         "help": handle_help,
         "commands": handle_help,
         "about": handle_about,
+        "length": handle_length,
         "done": handle_done,
         "next": handle_next,
         "retry": handle_retry,

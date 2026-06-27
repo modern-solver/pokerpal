@@ -26,9 +26,7 @@ def format_card(card: OutputCard) -> str:
         "Caption options:",
     ]
     for i, rendered in enumerate(card.rendered_variants, start=1):
-        tone = photo.variants[i - 1].tone if i - 1 < len(photo.variants) else ""
-        tone_tag = f" [{tone}]" if tone else ""
-        lines.append(f"{i}.{tone_tag} {rendered}")
+        lines.append(f"{i}. {rendered}")
     return "\n".join(lines)
 
 
@@ -61,6 +59,6 @@ def format_final_card(final: FinalCard) -> str:
     return (
         f"Post-ready for {final.platform}:\n\n"
         f"{final.rendered}\n\n"
-        f"(photo score {final.score:.1f}/10 · {final.tone} tone · "
-        f"variant {final.variant_index})"
+        f"(photo score {final.score:.1f}/10 · {final.length_mode} · "
+        f"option {final.variant_index})"
     )
