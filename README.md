@@ -161,3 +161,14 @@ Per the build process (`docs/dev_agents_v1.1.md`), this repo keeps only durable
 source-of-truth: spec docs, config schemas, `requirements.txt`, `.env.example`, the gate
 checklist, and source under VCS. Generated outputs, photo batches, transient logs, model
 caches, real `.env`, and scratch notebooks are **git-ignored** and must not be committed.
+
+---
+
+## Authors
+
+Curator Bot is built and maintained jointly by:
+
+- **Shaunak** — product direction, architecture, and review
+- **Claude Code** (Anthropic) — implementation, testing, and documentation
+
+Co-authored. See [`AUTHORS`](AUTHORS) for the canonical list.
